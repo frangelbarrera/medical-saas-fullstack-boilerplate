@@ -10,6 +10,8 @@
 
 > "Empowering medical professionals through precise intelligence and uncompromising security."
 
+![Main Dashboard](public/Screenshots/1.jpg)
+
 ---
 
 ## Key Features by Role
@@ -28,6 +30,10 @@
 *   **Advanced Agenda:** High-performance appointment scheduling with real-time status tracking (Scheduled, Active, Completed, No-Show).
 *   **Patient Intake:** Streamlined registration process with built-in validation for National IDs and clinical prioritization.
 *   **Billing & Payments:** Direct integration with digital payment platforms (Payphone) and insurance management.
+
+| Patient Directory | Medical Agenda |
+| :---: | :---: |
+| ![Patients](public/Screenshots/2.jpg) | ![Agenda](public/Screenshots/3.jpg) |
 
 ---
 
@@ -62,6 +68,10 @@ As an educational resource for cybersecurity in medical applications, the follow
 3. **Data Visualization:** Integrated `recharts` for rich, interactive, dynamic area-chart visualization tracking historical appointments vs newly registered patients, optimizing macro-management workflows.
 4. **Accessibility (a11y) Improvements:** Improved `aria-label` tags, refined visual hierarchy inputs, and fortified interactive fields with direct keyboard support (e.g. `Escape` key logic for exiting search contexts).
 5. **Role-Contextual Session Timeouts (Inactivity Guard):** Implemented an intelligent client-side idle timeout mechanism. To balance security with clinical operational reality, the platform automatically logs out administrative/secretary roles after `15 minutes` of inactivity (reducing exposure risk in open-office environments), while doctors are granted a `30-minute` idle window to accommodate longer patient consultations without disruptive re-authentication flows.
+
+| Financial Intelligence | Role-Based Access Control (RBAC) |
+| :---: | :---: |
+| ![Finances](public/Screenshots/4.jpg) | ![RBAC](public/Screenshots/5.jpg) |
 
 ### Required Hardening for Production (HIPAA / GDPR Target)
 While the boilerplate provides a strong foundation and robust application-layer security, the following **infrastructure** level configurations must be resolved before deploying natively to edge clusters or cloud providers:
