@@ -266,7 +266,15 @@ const authLimiter = rateLimit({
   message: { error: "Too many login attempts, please try again later." }
 });
 
-app.use(express.json({ limit: '1mb' })); // Limit payload size
+// Capture raw body for webhook signature verification. The JSON parser still
+// runs and populates req.body, but we also keep req.rawBody as a Buffer for
+// HMAC computation. This is required for verifying payment webhook signatures.
+app.use(express.json({
+  limit: '1mb',
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 setupSwagger(app);
 
 // Payload Validation Middleware
@@ -541,7 +549,7 @@ async function startServer() {
     const todayStr = today.toISOString().split('T')[0];
 
     for (let i = 0; i < numPatients; i++) {
-        const id = "pat_mock_" + Math.random().toString(36).substr(2, 9);
+        const id = "pat_mock_" + crypto.randomUUID();
         const name = `${firstNames[Math.floor(Math.random()*firstNames.length)]} ${lastNames[Math.floor(Math.random()*lastNames.length)]}`;
         const doctor = activeDoctors[i % activeDoctors.length];
         
@@ -564,7 +572,7 @@ async function startServer() {
         const mins = Math.random() > 0.5 ? "00" : "30";
         const apptDate = new Date(`${todayStr}T${hour.toString().padStart(2, '0')}:${mins}:00`);
 
-        const apptId = "appt_mock_" + Math.random().toString(36).substr(2, 9);
+        const apptId = "appt_mock_" + crypto.randomUUID();
         mockAppointments.push({
             id: apptId,
             patient_name: name,
@@ -585,7 +593,7 @@ async function startServer() {
         consDate.setHours(8 + Math.floor(Math.random() * 8));
 
         mockConsultations.push({
-            id: "cons_mock_" + Math.random().toString(36).substr(2, 9),
+            id: "cons_mock_" + crypto.randomUUID(),
             patient_id: id,
             date: consDate.toISOString(),
             reason: "Previous symptom assessment",
@@ -1226,38 +1234,47 @@ async function startServer() {
   });
 
   app.post("/api/payments/create-order", authenticateToken, validateBody(schemas.createOrder), async (req: any, res: any) => {
-    const { invoiceId, amount, patientName, clinicId } = req.body;
+    const { invoiceId, amount, patientName } = req.body;
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
 
     // --- TEST MODE IF NO TOKEN ---
     if (!PAYMENT_GATEWAY_TOKEN) {
-      console.warn("⚠️ PAYMENT_GATEWAY_TOKEN not configured. Using test URL.");
-      const logId = "log_mock_" + Math.random().toString(36).substr(2, 9);
+      console.warn("[payment] PAYMENT_GATEWAY_TOKEN not configured. Using test URL.");
       appendAuditLog(mockAuditLogs, {
-        id: logId, clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name, 
-        action: "Digital Payment Simulation (No Token)", target: invoiceId, type: "FINANCE", 
+        id: "log_" + crypto.randomUUID(), clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "Digital Payment Simulation (No Token)", target: invoiceId, type: "FINANCE",
         details: { amount, invoiceId, note: "Simulation mode activated due to missing credentials" }
       });
-      
-      // We return a Google URL as a simulation
-      return res.json({ 
-        paymentUrl: "https://www.google.com/search?q=Digital+Payment+Simulation", 
-        paymentId: "mock_id_123" 
+
+      return res.json({
+        paymentUrl: "https://www.google.com/search?q=Digital+Payment+Simulation",
+        paymentId: "mock_id_123"
       });
     }
 
     try {
       // Gateway expects amount in cents
       const amountInCents = Math.round(amount * 100);
-      
+
+      // Use FRONTEND_URL from env (not req.get('host')) to prevent Host Header Injection.
+      // An attacker could send a malicious Host header to redirect the payment responseUrl
+      // to an attacker-controlled domain.
+      const baseUrl = env.FRONTEND_URL;
+
       const payload = {
         amount: amountInCents,
         amountWithoutTax: amountInCents,
         currency: "USD",
         clientTransactionId: invoiceId,
-        // In a real app, these would be your app's URLs
-        responseUrl: `${req.protocol}://${req.get('host')}/finance?payment=success`,
-        cancellationUrl: `${req.protocol}://${req.get('host')}/finance?payment=cancelled`
+        responseUrl: `${baseUrl}/finance?payment=success`,
+        cancellationUrl: `${baseUrl}/finance?payment=cancelled`
       };
+
+      // Add timeout to prevent hanging requests (mitigates slow-loris style abuse
+      // and prevents the gateway from holding the connection indefinitely).
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
 
       const response = await fetch(PAYMENT_GATEWAY_URL, {
         method: "POST",
@@ -1265,8 +1282,16 @@ async function startServer() {
           "Authorization": `Bearer ${PAYMENT_GATEWAY_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      }).catch((fetchErr: any) => {
+        clearTimeout(timeout);
+        if (fetchErr.name === 'AbortError') {
+          throw new Error("Payment gateway request timed out after 10s");
+        }
+        throw new Error(`Payment gateway unreachable: ${fetchErr.message}`);
       });
+      clearTimeout(timeout);
 
       const data = await response.json();
 
@@ -1274,31 +1299,64 @@ async function startServer() {
         throw new Error(data.message || "Error creating payment order");
       }
 
-      // Log the attempt
-      const logId = "log_" + Math.random().toString(36).substr(2, 9);
       appendAuditLog(mockAuditLogs, {
-        id: logId, clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name, 
-        action: "Digital Payment Attempt", target: invoiceId, type: "FINANCE", 
+        id: "log_" + crypto.randomUUID(), clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "Digital Payment Attempt", target: invoiceId, type: "FINANCE",
         details: { amount, invoiceId, gatewayId: data.paymentId }
       });
 
       res.json({ paymentUrl: data.paymentUrl, paymentId: data.paymentId });
     } catch (err: any) {
-      console.error("Payment Gateway Error:", err);
-      res.status(500).json({ error: err.message });
+      console.error("[payment] Gateway error:", err.message);
+      res.status(500).json({ error: "Payment gateway error" });
     }
   });
 
-  // Webhook for payment confirmation
+  // Webhook for payment confirmation.
+  // Verifies HMAC-SHA256 signature over the raw request body using a shared
+  // secret (PAYMENT_WEBHOOK_SECRET). This prevents attackers from forging
+  // webhook calls to mark invoices as paid without a real payment.
   app.post("/api/webhooks/payment", async (req, res) => {
+    // 1. Verify HMAC signature. The signature is computed over the raw body.
+    //    We stored req.rawBody via the express.json verify hook below.
+    const signatureHeader = req.get('X-Signature') || req.get('X-Payphone-Signature') || '';
+    if (!signatureHeader || !env.PAYMENT_WEBHOOK_SECRET) {
+      return res.status(401).json({ error: "Missing signature or webhook secret not configured" });
+    }
+
+    const rawBody = (req as any).rawBody;
+    if (!rawBody) {
+      return res.status(400).json({ error: "Raw body required for signature verification" });
+    }
+
+    const expectedSignature = crypto
+      .createHmac('sha256', env.PAYMENT_WEBHOOK_SECRET)
+      .update(rawBody)
+      .digest('hex');
+
+    // Constant-time comparison to prevent timing attacks.
+    const signatureBuffer = Buffer.from(signatureHeader);
+    const expectedBuffer = Buffer.from(expectedSignature);
+    if (signatureBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
+      return res.status(401).json({ error: "Invalid signature" });
+    }
+
     const { clientTransactionId, transactionId, status } = req.body;
 
-    // Basic validation: status should be 'Approved'
     if (status !== "Approved") {
       return res.status(200).json({ message: "Transaction not approved" });
     }
 
     try {
+      // Idempotency: check if this transaction was already processed
+      const alreadyProcessed = mockAuditLogs.some(l =>
+        l.action === "Payment received via Digital Gateway" &&
+        l.details && l.details.transactionId === transactionId
+      );
+      if (alreadyProcessed) {
+        return res.status(200).json({ message: "Transaction already processed (idempotent)" });
+      }
+
       // 1. Update Invoice status
       const idx = mockInvoices.findIndex(i => i.id === clientTransactionId);
       if (idx === -1) {
@@ -1308,7 +1366,7 @@ async function startServer() {
       const invoice = mockInvoices[idx];
 
       // 2. Create Audit Log
-      const logId = "log_" + Math.random().toString(36).substr(2, 9);
+      const logId = "log_" + crypto.randomUUID();
       appendAuditLog(mockAuditLogs, {
         id: logId, clinic_id: invoice.clinic_id, user_id: "SYSTEM", user_name: "Payment Gateway Webhook", 
         action: "Payment received via Digital Gateway", target: clientTransactionId, type: "FINANCE", 
