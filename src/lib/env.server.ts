@@ -4,7 +4,10 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  // NODE_ENV is required (no default). The previous default of 'development'
+  // was a fail-open: if the env var was missing in production, the app would
+  // mount Vite dev middleware (CVE risk) and use a permissive CSP.
+  NODE_ENV: z.enum(["development", "test", "production"]),
   PORT: z
     .string()
     .default("3000")
@@ -14,8 +17,11 @@ const envSchema = z.object({
     .string()
     .default("5432")
     .transform((val) => parseInt(val, 10)),
-  PGUSER: z.string().default("postgres"),
-  PGPASSWORD: z.string().default("postgres"),
+  // PGUSER and PGPASSWORD are required (no defaults). The previous defaults
+  // of 'postgres'/'postgres' allowed silent connections with superuser
+  // credentials if the env vars were missing.
+  PGUSER: z.string().min(1),
+  PGPASSWORD: z.string().min(1),
   PGDATABASE: z.string().default("medical_saas_db"),
   // Auth secrets: NO defaults. The app must crash if these are missing.
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters. Generate one with: openssl rand -hex 32"),
@@ -44,10 +50,13 @@ const _env = envSchema.safeParse(process.env);
 if (!_env.success) {
   console.error("❌ Invalid or missing environment variables:");
   console.error(JSON.stringify(_env.error.format(), null, 2));
-  console.error("\nRequired secrets (no defaults):");
-  console.error("  JWT_SECRET          - min 32 chars   - generate: openssl rand -hex 32");
-  console.error("  ENCRYPTION_KEY      - 64 hex chars   - generate: openssl rand -hex 32");
-  console.error("  PAYMENT_WEBHOOK_SECRET - min 16 chars - generate: openssl rand -hex 16");
+  console.error("\nRequired (no defaults — the app crashes if missing):");
+  console.error("  NODE_ENV               - development | test | production");
+  console.error("  JWT_SECRET             - min 32 chars   - generate: openssl rand -hex 32");
+  console.error("  ENCRYPTION_KEY         - 64 hex chars   - generate: openssl rand -hex 32");
+  console.error("  PAYMENT_WEBHOOK_SECRET - min 16 chars   - generate: openssl rand -hex 16");
+  console.error("  PGUSER / PGPASSWORD    - PostgreSQL credentials (no defaults)");
+  console.error("Optional: FRONTEND_URL, GEMINI_API_KEY, PAYMENT_GATEWAY_TOKEN, LLM_PHI_MODE");
   process.exit(1);
 }
 

@@ -35,10 +35,11 @@ authRouter.get("/api/auth/me", authenticateToken, (req: AuthenticatedRequest, re
 authRouter.post("/api/auth/logout", (req, res) => {
   clearVolatile();
 
-  // Revoke the refresh token if present
+  // Revoke the refresh token if present (no fallback to non-prefixed cookie
+  // in production — __Host- prefix must be enforced to prevent subdomain injection).
   const isProd = env.NODE_ENV === "production";
   const refreshCookieName = getRefreshCookieName(isProd);
-  const rawRefreshToken = req.cookies?.[refreshCookieName] || req.cookies?.["refresh_token"];
+  const rawRefreshToken = req.cookies?.[refreshCookieName] || (!isProd ? req.cookies?.["refresh_token"] : undefined);
   if (rawRefreshToken) {
     revokeRefreshToken(rawRefreshToken);
   }
@@ -76,6 +77,7 @@ authRouter.post("/api/auth/login", authLimiter, validateBody(schemas.login), asy
             name: u.name,
             role: u.role,
             clinic_id: u.clinic_id,
+            is_active: u.is_active,
             managed_doctor_ids:
               typeof u.managed_doctor_ids === "string" ? JSON.parse(u.managed_doctor_ids) : u.managed_doctor_ids,
           };
@@ -85,16 +87,31 @@ authRouter.post("/api/auth/login", authLimiter, validateBody(schemas.login), asy
       }
     }
 
+    // Fallback to mock
     if (!user) {
       user = mockUsers.find((u) => u.username === username);
     }
 
-    if (!user || !bcrypt.compareSync(password, user.password)) {
+    // Timing attack mitigation: always run bcrypt compare, even if user not found.
+    // Without this, an attacker can distinguish "user not found" (~5ms) from
+    // "user found, wrong password" (~100ms bcrypt) via response time.
+    const DUMMY_HASH = "$2a$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTUV1234567890abcdefghijklmnopqrstuv";
+    const hashToCompare = user?.password || DUMMY_HASH;
+    const passwordValid = !!user && bcrypt.compareSync(password, hashToCompare);
+
+    if (!user || !passwordValid) {
       return res.status(401).json({ error: "Invalid username or password" });
     }
 
+    // SECURITY: deactivated users cannot establish new sessions.
+    if (user.is_active === false) {
+      return res.status(401).json({ error: "Invalid username or password" });
+    }
+
+    // The role check uses a generic error message to avoid confirming the
+    // password is valid (which would enable credential stuffing confirmation).
     if (role && user.role.toUpperCase() !== role.toUpperCase()) {
-      return res.status(401).json({ error: `User exists but does not have the ${role} role` });
+      return res.status(401).json({ error: "Invalid username or password" });
     }
 
     const isProd = env.NODE_ENV === "production";
@@ -164,7 +181,8 @@ authRouter.post("/api/auth/refresh", authLimiter, async (req, res) => {
   try {
     const isProd = env.NODE_ENV === "production";
     const refreshCookieName = getRefreshCookieName(isProd);
-    const rawRefreshToken = req.cookies?.[refreshCookieName] || req.cookies?.["refresh_token"];
+    // In production, only accept the __Host- prefixed cookie (no fallback).
+    const rawRefreshToken = req.cookies?.[refreshCookieName] || (!isProd ? req.cookies?.["refresh_token"] : undefined);
 
     if (!rawRefreshToken) {
       return res.status(401).json({ error: "No refresh token provided" });
@@ -188,6 +206,7 @@ authRouter.post("/api/auth/refresh", authLimiter, async (req, res) => {
             name: u.name,
             role: u.role,
             clinic_id: u.clinic_id,
+            is_active: u.is_active,
             managed_doctor_ids:
               typeof u.managed_doctor_ids === "string" ? JSON.parse(u.managed_doctor_ids) : u.managed_doctor_ids,
           };
@@ -202,7 +221,9 @@ authRouter.post("/api/auth/refresh", authLimiter, async (req, res) => {
     if (!user) {
       return res.status(401).json({ error: "User not found" });
     }
-    if (!user.is_active) {
+    if (user.is_active === false) {
+      // Revoke the refresh token — deactivated user should not be able to refresh.
+      revokeRefreshToken(rawRefreshToken);
       return res.status(401).json({ error: "Account is inactive" });
     }
 

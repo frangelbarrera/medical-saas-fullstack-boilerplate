@@ -3,7 +3,7 @@
  */
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { env, JWT_SECRET } from "../config.js";
+import { JWT_SECRET } from "../config.js";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -17,11 +17,13 @@ export interface AuthenticatedRequest extends Request {
 }
 
 export const authenticateToken = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const cookieName = env.NODE_ENV === "production" ? "__Host-token" : "token";
+  // Read session cookie. In production, use __Host- prefix only (no fallback
+  // to non-prefixed 'token', which would allow cookie injection from subdomains).
+  // In dev, use 'token'. Authorization header is allowed for non-browser API clients.
+  const isProd = process.env.NODE_ENV === "production";
+  const cookieName = isProd ? "__Host-token" : "token";
   const token =
-    req.cookies?.[cookieName] ||
-    req.cookies?.token ||
-    (req.headers["authorization"] && req.headers["authorization"].split(" ")[1]);
+    req.cookies?.[cookieName] || (req.headers["authorization"] && req.headers["authorization"].split(" ")[1]);
 
   if (!token) return res.sendStatus(401);
 

@@ -4,7 +4,7 @@
  * Exports createApp() so tests can import the app and use supertest directly
  * without spawning a child process. The listen() call lives in index.ts.
  */
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -35,6 +35,12 @@ const __dirname = path.dirname(__filename);
 
 export async function createApp(): Promise<express.Application> {
   const app = express();
+
+  // Trust the first proxy (nginx, Caddy, etc.) so req.ip reflects the real
+  // client IP from X-Forwarded-For. Without this, rate limiters bucket all
+  // requests to the proxy's IP (typically 127.0.0.1), making them ineffective.
+  // 'loopback, linklocal, uniquelocal' would be safer for multi-hop setups.
+  app.set("trust proxy", 1);
 
   // HTTP request logger (pino-http) — logs every request with PHI redacted
   app.use(await createHttpLogger());
@@ -103,6 +109,40 @@ export async function createApp(): Promise<express.Application> {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  // Global error handler — catches errors from body-parser, cookie-parser,
+  // CSRF middleware, and any unhandled errors in route handlers. Prevents
+  // stack traces from leaking to clients in production.
+  // MUST be registered after all other middleware and routes.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+    // Log the full error server-side for debugging
+    logger.error({
+      msg: "Unhandled error",
+      error: err.message,
+      stack: env.NODE_ENV === "production" ? undefined : err.stack,
+      url: req.url,
+      method: req.method,
+    });
+
+    // In production, never leak internal error details to the client.
+    // In development, return the stack for easier debugging.
+    if (env.NODE_ENV === "production") {
+      // Handle specific known errors with appropriate status codes
+      if (err.type === "entity.too.large") {
+        return res.status(413).json({ error: "Request body too large" });
+      }
+      if (err.type === "entity.parse.failed" || err instanceof SyntaxError) {
+        return res.status(400).json({ error: "Invalid JSON" });
+      }
+      return res.status(500).json({ error: "Internal server error" });
+    }
+
+    return res.status(err.status || 500).json({
+      error: err.message || "Internal server error",
+      ...(err.stack ? { stack: err.stack } : {}),
+    });
+  });
 
   return app;
 }

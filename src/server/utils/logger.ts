@@ -32,6 +32,13 @@ const PHI_REDACT_PATHS = [
   "password_hash",
   "token",
   "csrf_token",
+  // HTTP headers containing credentials (pino-http logs all headers by default)
+  "req.headers.cookie",
+  "req.headers.authorization",
+  "req.headers['x-csrf-token']",
+  "req.headers['x-csrf_token']",
+  "req.headers.Cookie",
+  "req.headers.Authorization",
   // Nested in patient/user objects
   "patient.name",
   "patient.dni",

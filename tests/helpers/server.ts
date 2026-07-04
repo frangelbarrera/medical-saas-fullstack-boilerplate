@@ -37,6 +37,8 @@ export async function startTestServer(port = 3999): Promise<{
       ENCRYPTION_KEY: "a".repeat(64),
       PAYMENT_WEBHOOK_SECRET: "test_webhook_secret_min_16_chars",
       FRONTEND_URL: "http://localhost:3000",
+      ADMIN_USERNAME: "e2eadmin",
+      ADMIN_PASSWORD: "e2epass123",
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
