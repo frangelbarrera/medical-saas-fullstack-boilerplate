@@ -1,14 +1,9 @@
-export type UserRole = "ADMIN" | "SECRETARY" | "DOCTOR";
-
-export interface UserProfile {
-  uid: string;
-  email: string | null;
-  name: string | null;
-  photoURL: string | null;
-  clinicId: string;
-  role: UserRole;
-  createdAt: any;
-}
+/**
+ * Domain types used by the frontend.
+ *
+ * NOTE: The backend (src/server/) uses its own types defined inline in route
+ * handlers and middleware. These types are for the React components only.
+ */
 
 export interface Patient {
   id: string;
@@ -20,7 +15,7 @@ export interface Patient {
   lastVisit: string;
   cond: string;
   bloodType?: string;
-  allergies?: string; // Kept for backward compatibility
+  allergies?: string;
   allergiesList?: string[];
   hereditary?: string;
   insurance?: string;
@@ -59,17 +54,6 @@ export interface AuditLog {
   ua: string;
   time: string;
   type: "read" | "write" | "create" | "export" | "alert" | "sign";
-}
-
-export interface CIE10 {
-  code: string;
-  desc: string;
-}
-
-export interface Medication {
-  id: number;
-  name: string;
-  dose: string;
 }
 
 export interface VitalSigns {
