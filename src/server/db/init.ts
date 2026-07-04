@@ -54,15 +54,18 @@ export async function initDb(): Promise<void> {
       const adminRes = await client.query("SELECT * FROM users WHERE username = $1", [adminUsername]);
       if (adminRes.rows.length === 0) {
         const hashedPassword = bcrypt.hashSync(adminPassword, 12);
-        await client.query(
-          "INSERT INTO clinics (id, name, owner_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
-          [clinicId, clinicName, "admin_root"]
-        );
+        await client.query("INSERT INTO clinics (id, name, owner_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING", [
+          clinicId,
+          clinicName,
+          "admin_root",
+        ]);
         await client.query(
           "INSERT INTO users (id, username, password, name, role, clinic_id) VALUES ($1, $2, $3, $4, $5, $6)",
-          ["admin_root", adminUsername, hashedPassword, adminName, "ADMIN", clinicId]
+          ["admin_root", adminUsername, hashedPassword, adminName, "ADMIN", clinicId],
         );
-        console.log(`[db] Initial admin '${adminUsername}' provisioned. Change the password immediately after first login.`);
+        console.log(
+          `[db] Initial admin '${adminUsername}' provisioned. Change the password immediately after first login.`,
+        );
       }
     } else {
       console.warn("[db] ADMIN_USERNAME / ADMIN_PASSWORD not set. No initial admin seeded.");

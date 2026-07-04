@@ -100,7 +100,7 @@ export async function login(
   baseUrl: string,
   username: string,
   password: string,
-  role?: string
+  role?: string,
 ): Promise<{ cookies: string; csrfToken: string; user: any }> {
   const body: any = { username, password };
   if (role) body.role = role;
@@ -136,7 +136,7 @@ export async function authedFetch(
     csrfToken: string;
     method?: string;
     body?: any;
-  }
+  },
 ): Promise<Response> {
   const headers: Record<string, string> = {
     Cookie: opts.cookies,

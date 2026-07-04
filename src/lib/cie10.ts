@@ -48,5 +48,8 @@ export const CIE10_COMMON = [
   { code: "R52", description: "Pain, not elsewhere classified" },
   { code: "R53", description: "Malaise and fatigue" },
   { code: "U07", description: "Emergency conditions (COVID-19)" },
-  { code: "Z00", description: "General medical examination and investigation of persons without complaint or reported diagnosis" }
+  {
+    code: "Z00",
+    description: "General medical examination and investigation of persons without complaint or reported diagnosis",
+  },
 ];

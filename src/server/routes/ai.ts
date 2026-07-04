@@ -17,7 +17,8 @@ aiRouter.post("/api/ai/process-consultation", authenticateToken, async (req: Aut
     await new Promise((resolve) => setTimeout(resolve, 3000));
     const aiResult = {
       reason: "Acute abdominal pain and nausea",
-      evolution: "Patient reports pain in epigastrium of 24 hours duration, colicky, intensity 7/10. Accompanied by nausea without vomiting. No fever.",
+      evolution:
+        "Patient reports pain in epigastrium of 24 hours duration, colicky, intensity 7/10. Accompanied by nausea without vomiting. No fever.",
       vital_signs: {
         pulse: "82",
         temp: "37.2",
@@ -52,51 +53,67 @@ aiRouter.get("/api/ai_chats", authenticateToken, async (req: AuthenticatedReques
   }
 });
 
-aiRouter.post("/api/ai_chats", authenticateToken, validateBody(schemas.aiChatCreate), async (req: AuthenticatedRequest, res) => {
-  const { title, messages } = req.body;
-  const clinicId = req.user!.clinicId;
-  const userId = req.user!.id;
-  const id = generateRandomId("chat");
+aiRouter.post(
+  "/api/ai_chats",
+  authenticateToken,
+  validateBody(schemas.aiChatCreate),
+  async (req: AuthenticatedRequest, res) => {
+    const { title, messages } = req.body;
+    const clinicId = req.user!.clinicId;
+    const userId = req.user!.id;
+    const id = generateRandomId("chat");
 
-  try {
-    const newChat = {
-      id,
-      user_id: userId,
-      clinic_id: clinicId,
-      title,
-      messages,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    mockAiChats.push(newChat);
-    res.json(newChat);
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-aiRouter.put("/api/ai_chats/:id", authenticateToken, validateBody(schemas.aiChatUpdate), async (req: AuthenticatedRequest, res) => {
-  const { title, messages } = req.body;
-  try {
-    const idx = mockAiChats.findIndex((c) => c.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: "Chat not found" });
-    if (!assertClinicOwnership(mockAiChats[idx].clinic_id, req.user!.clinicId) || mockAiChats[idx].user_id !== req.user!.id) {
-      return res.status(404).json({ error: "Chat not found" });
+    try {
+      const newChat = {
+        id,
+        user_id: userId,
+        clinic_id: clinicId,
+        title,
+        messages,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      mockAiChats.push(newChat);
+      res.json(newChat);
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
     }
-    if (title !== undefined) mockAiChats[idx].title = title;
-    if (messages !== undefined) mockAiChats[idx].messages = messages;
-    mockAiChats[idx].updated_at = new Date().toISOString();
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+  },
+);
+
+aiRouter.put(
+  "/api/ai_chats/:id",
+  authenticateToken,
+  validateBody(schemas.aiChatUpdate),
+  async (req: AuthenticatedRequest, res) => {
+    const { title, messages } = req.body;
+    try {
+      const idx = mockAiChats.findIndex((c) => c.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "Chat not found" });
+      if (
+        !assertClinicOwnership(mockAiChats[idx].clinic_id, req.user!.clinicId) ||
+        mockAiChats[idx].user_id !== req.user!.id
+      ) {
+        return res.status(404).json({ error: "Chat not found" });
+      }
+      if (title !== undefined) mockAiChats[idx].title = title;
+      if (messages !== undefined) mockAiChats[idx].messages = messages;
+      mockAiChats[idx].updated_at = new Date().toISOString();
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 aiRouter.delete("/api/ai_chats/:id", authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const idx = mockAiChats.findIndex((c) => c.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Chat not found" });
-    if (!assertClinicOwnership(mockAiChats[idx].clinic_id, req.user!.clinicId) || mockAiChats[idx].user_id !== req.user!.id) {
+    if (
+      !assertClinicOwnership(mockAiChats[idx].clinic_id, req.user!.clinicId) ||
+      mockAiChats[idx].user_id !== req.user!.id
+    ) {
       return res.status(404).json({ error: "Chat not found" });
     }
     mockAiChats.splice(idx, 1);

@@ -26,7 +26,10 @@ export interface AuditLogEntry {
 export const appendAuditLog = (logData: AuditLogEntry) => {
   const timestamp = new Date().toISOString();
   const dataString = JSON.stringify({ ...logData, timestamp });
-  const currentHash = crypto.createHash("sha256").update(lastLogHash + dataString).digest("hex");
+  const currentHash = crypto
+    .createHash("sha256")
+    .update(lastLogHash + dataString)
+    .digest("hex");
 
   const sealedLog = {
     ...logData,

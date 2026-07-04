@@ -39,7 +39,8 @@ webhooksRouter.post("/api/webhooks/payment", async (req: Request, res: Response)
   try {
     // Idempotency: skip if already processed
     const alreadyProcessed = mockAuditLogs.some(
-      (l) => l.action === "Payment received via Digital Gateway" && l.details && l.details.transactionId === transactionId
+      (l) =>
+        l.action === "Payment received via Digital Gateway" && l.details && l.details.transactionId === transactionId,
     );
     if (alreadyProcessed) {
       return res.status(200).json({ message: "Transaction already processed (idempotent)" });

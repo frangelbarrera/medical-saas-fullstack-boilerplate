@@ -53,7 +53,8 @@ authRouter.post("/api/auth/login", authLimiter, validateBody(schemas.login), asy
             name: u.name,
             role: u.role,
             clinic_id: u.clinic_id,
-            managed_doctor_ids: typeof u.managed_doctor_ids === "string" ? JSON.parse(u.managed_doctor_ids) : u.managed_doctor_ids,
+            managed_doctor_ids:
+              typeof u.managed_doctor_ids === "string" ? JSON.parse(u.managed_doctor_ids) : u.managed_doctor_ids,
           };
         }
       } catch (dbErr) {
@@ -84,7 +85,7 @@ authRouter.post("/api/auth/login", authLimiter, validateBody(schemas.login), asy
         managed_doctor_ids: user.managed_doctor_ids,
       },
       JWT_SECRET,
-      { expiresIn: "8h" }
+      { expiresIn: "8h" },
     );
 
     const isProd = env.NODE_ENV === "production";

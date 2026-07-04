@@ -11,19 +11,23 @@ import { appendAuditLog } from "../utils/audit.js";
 
 export const consultationsRouter = Router();
 
-consultationsRouter.get("/api/patients/:id/consultations", authenticateToken, async (req: AuthenticatedRequest, res) => {
-  try {
-    const patient = mockPatients.find((p) => p.id === req.params.id);
-    if (!patient) return res.status(404).json({ error: "Patient not found" });
-    if (!assertClinicOwnership(patient.clinic_id, req.user!.clinicId)) {
-      return res.status(404).json({ error: "Patient not found" });
+consultationsRouter.get(
+  "/api/patients/:id/consultations",
+  authenticateToken,
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const patient = mockPatients.find((p) => p.id === req.params.id);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+      if (!assertClinicOwnership(patient.clinic_id, req.user!.clinicId)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+      const filtered = mockConsultations.filter((c) => c.patient_id === req.params.id);
+      res.json(filtered);
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
     }
-    const filtered = mockConsultations.filter((c) => c.patient_id === req.params.id);
-    res.json(filtered);
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+  },
+);
 
 consultationsRouter.post(
   "/api/patients/:id/consultations",
@@ -69,5 +73,5 @@ consultationsRouter.post(
     } catch (err: any) {
       res.status(500).json({ error: "Internal server error" });
     }
-  }
+  },
 );

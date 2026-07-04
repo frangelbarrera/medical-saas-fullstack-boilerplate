@@ -229,5 +229,5 @@ export const MEDICATIONS_COMMON = [
   "Zidovudine",
   "Zinc Oxide",
   "Zolpidem",
-  "Zopiclone"
+  "Zopiclone",
 ];

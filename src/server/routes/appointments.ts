@@ -31,41 +31,46 @@ appointmentsRouter.get("/api/appointments", authenticateToken, async (req: Authe
   }
 });
 
-appointmentsRouter.post("/api/appointments", authenticateToken, validateBody(schemas.appointmentCreate), async (req: AuthenticatedRequest, res) => {
-  const { patientName, patientId, type, duration, reason, dateTime, doctorId, doctorName } = req.body;
-  const clinicId = req.user!.clinicId;
-  const id = generateRandomId("appt");
+appointmentsRouter.post(
+  "/api/appointments",
+  authenticateToken,
+  validateBody(schemas.appointmentCreate),
+  async (req: AuthenticatedRequest, res) => {
+    const { patientName, patientId, type, duration, reason, dateTime, doctorId, doctorName } = req.body;
+    const clinicId = req.user!.clinicId;
+    const id = generateRandomId("appt");
 
-  try {
-    const newAppt = {
-      id,
-      patient_name: patientName,
-      patient_id: patientId,
-      type,
-      duration,
-      reason,
-      date_time: dateTime,
-      clinic_id: clinicId,
-      doctor_id: doctorId,
-      doctor_name: doctorName,
-      created_at: new Date().toISOString(),
-    };
-    mockAppointments.push(newAppt);
-    appendAuditLog({
-      id: generateRandomId("log"),
-      clinic_id: clinicId,
-      user_id: req.user!.id,
-      user_name: req.user!.name,
-      action: "APPOINTMENT_CREATE",
-      target: id,
-      type: "SCHEDULE",
-      details: { patientId, doctorId, dateTime },
-    });
-    res.json(newAppt);
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+    try {
+      const newAppt = {
+        id,
+        patient_name: patientName,
+        patient_id: patientId,
+        type,
+        duration,
+        reason,
+        date_time: dateTime,
+        clinic_id: clinicId,
+        doctor_id: doctorId,
+        doctor_name: doctorName,
+        created_at: new Date().toISOString(),
+      };
+      mockAppointments.push(newAppt);
+      appendAuditLog({
+        id: generateRandomId("log"),
+        clinic_id: clinicId,
+        user_id: req.user!.id,
+        user_name: req.user!.name,
+        action: "APPOINTMENT_CREATE",
+        target: id,
+        type: "SCHEDULE",
+        details: { patientId, doctorId, dateTime },
+      });
+      res.json(newAppt);
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 appointmentsRouter.delete("/api/appointments/:id", authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {

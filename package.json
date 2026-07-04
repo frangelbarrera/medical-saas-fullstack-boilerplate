@@ -1,7 +1,7 @@
 {
   "name": "full-stack-medical-saas-boilerplate",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Full-Stack Medical SaaS Boilerplate with AI Scribe, EHR, audit trail and HIPAA-aware design.",
   "type": "module",
   "scripts": {
@@ -12,13 +12,22 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ci": "vitest run --coverage"
+    "test:ci": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "@prisma/client": "^5.22.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.3",
@@ -32,6 +41,8 @@
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "pg": "^8.20.0",
+    "pino": "^9.5.0",
+    "pino-http": "^10.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.8.1",
@@ -41,6 +52,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "@playwright/test": "^1.49.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
@@ -54,10 +67,19 @@
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "@vitest/coverage-v8": "^2.1.0",
+    "eslint": "^9.15.0",
+    "eslint-plugin-no-secrets": "^2.2.1",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.14",
+    "eslint-plugin-security": "^3.0.1",
+    "globals": "^15.12.0",
+    "prettier": "^3.4.2",
+    "prisma": "^5.22.0",
     "supertest": "^7.0.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
+    "typescript-eslint": "^8.16.0",
     "vite": "^6.2.0",
     "vitest": "^2.1.0"
   }

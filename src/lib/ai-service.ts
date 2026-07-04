@@ -52,7 +52,7 @@ const redactValue = (value: string): string => {
  */
 export const sanitizePatientForLLM = (
   patient: any,
-  mode: PhiMode = (typeof process !== "undefined" && (process.env?.LLM_PHI_MODE as PhiMode)) || "strip"
+  mode: PhiMode = (typeof process !== "undefined" && (process.env?.LLM_PHI_MODE as PhiMode)) || "strip",
 ): any => {
   if (mode === "passthrough") {
     return patient;
@@ -83,7 +83,7 @@ export const sanitizePatientForLLM = (
  */
 export const sanitizeTextForLLM = (
   text: string,
-  mode: PhiMode = (typeof process !== "undefined" && (process.env?.LLM_PHI_MODE as PhiMode)) || "strip"
+  mode: PhiMode = (typeof process !== "undefined" && (process.env?.LLM_PHI_MODE as PhiMode)) || "strip",
 ): string => {
   if (mode === "passthrough") return text;
   let result = text;
@@ -94,7 +94,10 @@ export const sanitizeTextForLLM = (
   // National ID pattern (10 digits, common in LatAm)
   result = result.replace(/\b\d{10}\b/g, "[ID]");
   if (mode === "strip") {
-    result = result.replace(/\[EMAIL\]/g, "").replace(/\[PHONE\]/g, "").replace(/\[ID\]/g, "");
+    result = result
+      .replace(/\[EMAIL\]/g, "")
+      .replace(/\[PHONE\]/g, "")
+      .replace(/\[ID\]/g, "");
   }
   return result;
 };
@@ -104,8 +107,7 @@ export const sanitizeTextForLLM = (
  */
 const searchPatients: FunctionDeclaration = {
   name: "search_patients",
-  description:
-    "Search patients by name or ID number within the clinic. Returns only sanitized metadata (no raw PHI).",
+  description: "Search patients by name or ID number within the clinic. Returns only sanitized metadata (no raw PHI).",
   parameters: {
     type: Type.OBJECT,
     properties: {

@@ -13,8 +13,42 @@ adminRouter.post("/api/admin/populate", authenticateToken, requireRole("ADMIN"),
   const clinicId = req.user!.clinicId; // IDOR fix: from JWT
 
   const numPatients = 10;
-  const firstNames = ["James", "Maria", "Robert", "Linda", "Michael", "Patricia", "William", "Barbara", "David", "Susan", "Thomas", "Jessica", "Sarah", "Karen", "Nancy", "Lisa"];
-  const lastNames = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas"];
+  const firstNames = [
+    "James",
+    "Maria",
+    "Robert",
+    "Linda",
+    "Michael",
+    "Patricia",
+    "William",
+    "Barbara",
+    "David",
+    "Susan",
+    "Thomas",
+    "Jessica",
+    "Sarah",
+    "Karen",
+    "Nancy",
+    "Lisa",
+  ];
+  const lastNames = [
+    "Smith",
+    "Johnson",
+    "Williams",
+    "Brown",
+    "Jones",
+    "Garcia",
+    "Miller",
+    "Davis",
+    "Rodriguez",
+    "Martinez",
+    "Hernandez",
+    "Lopez",
+    "Gonzalez",
+    "Wilson",
+    "Anderson",
+    "Thomas",
+  ];
 
   const activeDoctors = mockUsers.filter((u) => u.role === "DOCTOR" && u.clinic_id === clinicId);
   if (!activeDoctors.length) {
@@ -38,7 +72,7 @@ adminRouter.post("/api/admin/populate", authenticateToken, requireRole("ADMIN"),
       birth_date: encryptPHI(
         new Date(1960 + Math.floor(Math.random() * 40), Math.floor(Math.random() * 12), Math.floor(Math.random() * 28))
           .toISOString()
-          .split("T")[0]
+          .split("T")[0],
       ),
       gender: Math.random() > 0.5 ? "M" : "F",
       status: "Active",

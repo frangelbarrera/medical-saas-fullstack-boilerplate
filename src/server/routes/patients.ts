@@ -27,86 +27,96 @@ patientsRouter.get("/api/patients", authenticateToken, async (req: Authenticated
         phone: decryptPHI(p.phone),
         clinicId: p.clinic_id,
         birthDate: decryptPHI(p.birth_date),
-      }))
+      })),
     );
   } catch (err: any) {
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-patientsRouter.post("/api/patients", authenticateToken, validateBody(schemas.patientCreate), async (req: AuthenticatedRequest, res) => {
-  const { name, dni, email, phone, birthDate, gender, status } = req.body;
-  const clinicId = req.user!.clinicId;
-  const id = generateRandomId("pat");
+patientsRouter.post(
+  "/api/patients",
+  authenticateToken,
+  validateBody(schemas.patientCreate),
+  async (req: AuthenticatedRequest, res) => {
+    const { name, dni, email, phone, birthDate, gender, status } = req.body;
+    const clinicId = req.user!.clinicId;
+    const id = generateRandomId("pat");
 
-  try {
-    const newPat = {
-      id,
-      name,
-      dni: encryptPHI(dni),
-      email: encryptPHI(email),
-      phone: encryptPHI(phone),
-      birth_date: encryptPHI(birthDate),
-      gender,
-      status,
-      clinic_id: clinicId,
-    };
-    mockPatients.push(newPat);
-    appendAuditLog({
-      id: generateRandomId("log"),
-      clinic_id: clinicId,
-      user_id: req.user!.id,
-      user_name: req.user!.name,
-      action: "PATIENT_CREATE",
-      target: id,
-      type: "PHI",
-      details: { name },
-    });
-    res.json({ ...newPat, dni, email, phone, clinicId: newPat.clinic_id, birthDate });
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-patientsRouter.put("/api/patients/:id", authenticateToken, validateBody(schemas.patientUpdate), async (req: AuthenticatedRequest, res) => {
-  const { name, dni, email, phone, birthDate, gender, status } = req.body;
-  try {
-    const idx = mockPatients.findIndex((p) => p.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: "Patient not found" });
-    if (!assertClinicOwnership(mockPatients[idx].clinic_id, req.user!.clinicId)) {
-      return res.status(404).json({ error: "Patient not found" });
+    try {
+      const newPat = {
+        id,
+        name,
+        dni: encryptPHI(dni),
+        email: encryptPHI(email),
+        phone: encryptPHI(phone),
+        birth_date: encryptPHI(birthDate),
+        gender,
+        status,
+        clinic_id: clinicId,
+      };
+      mockPatients.push(newPat);
+      appendAuditLog({
+        id: generateRandomId("log"),
+        clinic_id: clinicId,
+        user_id: req.user!.id,
+        user_name: req.user!.name,
+        action: "PATIENT_CREATE",
+        target: id,
+        type: "PHI",
+        details: { name },
+      });
+      res.json({ ...newPat, dni, email, phone, clinicId: newPat.clinic_id, birthDate });
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
     }
-    mockPatients[idx] = {
-      ...mockPatients[idx],
-      name: name || mockPatients[idx].name,
-      dni: dni ? encryptPHI(dni) : mockPatients[idx].dni,
-      email: email !== undefined ? encryptPHI(email) : mockPatients[idx].email,
-      phone: phone !== undefined ? encryptPHI(phone) : mockPatients[idx].phone,
-      birth_date: birthDate ? encryptPHI(birthDate) : mockPatients[idx].birth_date,
-      gender: gender || mockPatients[idx].gender,
-      status: status || mockPatients[idx].status,
-    };
-    appendAuditLog({
-      id: generateRandomId("log"),
-      clinic_id: req.user!.clinicId,
-      user_id: req.user!.id,
-      user_name: req.user!.name,
-      action: "PATIENT_UPDATE",
-      target: req.params.id,
-      type: "PHI",
-      details: { name, gender, status },
-    });
-    res.json({
-      ...mockPatients[idx],
-      dni: decryptPHI(mockPatients[idx].dni),
-      email: decryptPHI(mockPatients[idx].email),
-      phone: decryptPHI(mockPatients[idx].phone),
-      birthDate: decryptPHI(mockPatients[idx].birth_date),
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+  },
+);
+
+patientsRouter.put(
+  "/api/patients/:id",
+  authenticateToken,
+  validateBody(schemas.patientUpdate),
+  async (req: AuthenticatedRequest, res) => {
+    const { name, dni, email, phone, birthDate, gender, status } = req.body;
+    try {
+      const idx = mockPatients.findIndex((p) => p.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "Patient not found" });
+      if (!assertClinicOwnership(mockPatients[idx].clinic_id, req.user!.clinicId)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+      mockPatients[idx] = {
+        ...mockPatients[idx],
+        name: name || mockPatients[idx].name,
+        dni: dni ? encryptPHI(dni) : mockPatients[idx].dni,
+        email: email !== undefined ? encryptPHI(email) : mockPatients[idx].email,
+        phone: phone !== undefined ? encryptPHI(phone) : mockPatients[idx].phone,
+        birth_date: birthDate ? encryptPHI(birthDate) : mockPatients[idx].birth_date,
+        gender: gender || mockPatients[idx].gender,
+        status: status || mockPatients[idx].status,
+      };
+      appendAuditLog({
+        id: generateRandomId("log"),
+        clinic_id: req.user!.clinicId,
+        user_id: req.user!.id,
+        user_name: req.user!.name,
+        action: "PATIENT_UPDATE",
+        target: req.params.id,
+        type: "PHI",
+        details: { name, gender, status },
+      });
+      res.json({
+        ...mockPatients[idx],
+        dni: decryptPHI(mockPatients[idx].dni),
+        email: decryptPHI(mockPatients[idx].email),
+        phone: decryptPHI(mockPatients[idx].phone),
+        birthDate: decryptPHI(mockPatients[idx].birth_date),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 patientsRouter.delete("/api/patients/:id", authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {

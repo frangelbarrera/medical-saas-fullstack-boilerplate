@@ -23,18 +23,23 @@ clinicsRouter.get("/api/clinics/:id", authenticateToken, async (req: Authenticat
   }
 });
 
-clinicsRouter.put("/api/clinics/:id", authenticateToken, validateBody(schemas.clinicUpdate), async (req: AuthenticatedRequest, res) => {
-  const { name, address, phone, email, logo } = req.body;
-  try {
-    if (req.params.id !== req.user!.clinicId) {
-      return res.status(404).json({ error: "Clinic not found" });
+clinicsRouter.put(
+  "/api/clinics/:id",
+  authenticateToken,
+  validateBody(schemas.clinicUpdate),
+  async (req: AuthenticatedRequest, res) => {
+    const { name, address, phone, email, logo } = req.body;
+    try {
+      if (req.params.id !== req.user!.clinicId) {
+        return res.status(404).json({ error: "Clinic not found" });
+      }
+      const idx = mockClinics.findIndex((c) => c.id === req.params.id);
+      if (idx !== -1) {
+        mockClinics[idx] = { ...mockClinics[idx], name, address, phone, email, logo };
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
     }
-    const idx = mockClinics.findIndex((c) => c.id === req.params.id);
-    if (idx !== -1) {
-      mockClinics[idx] = { ...mockClinics[idx], name, address, phone, email, logo };
-    }
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+  },
+);

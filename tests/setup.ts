@@ -4,12 +4,9 @@
  * if these are missing, so we set them here.
  */
 process.env.NODE_ENV = "test";
-process.env.JWT_SECRET =
-  process.env.JWT_SECRET || "test_jwt_secret_minimum_32_characters_long_for_testing_only";
-process.env.ENCRYPTION_KEY =
-  process.env.ENCRYPTION_KEY || "a".repeat(64);
-process.env.PAYMENT_WEBHOOK_SECRET =
-  process.env.PAYMENT_WEBHOOK_SECRET || "test_webhook_secret_min_16_chars";
+process.env.JWT_SECRET = process.env.JWT_SECRET || "test_jwt_secret_minimum_32_characters_long_for_testing_only";
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "a".repeat(64);
+process.env.PAYMENT_WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET || "test_webhook_secret_min_16_chars";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 process.env.PGHOST = process.env.PGHOST || "localhost";
 process.env.PGPORT = process.env.PGPORT || "5432";

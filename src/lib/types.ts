@@ -1,4 +1,4 @@
-export type UserRole = 'ADMIN' | 'SECRETARY' | 'DOCTOR';
+export type UserRole = "ADMIN" | "SECRETARY" | "DOCTOR";
 
 export interface UserProfile {
   uid: string;
@@ -16,7 +16,7 @@ export interface Patient {
   name: string;
   age: number;
   doctor: string;
-  status: 'Active' | 'Urgent' | 'Inactive';
+  status: "Active" | "Urgent" | "Inactive";
   lastVisit: string;
   cond: string;
   bloodType?: string;
@@ -24,14 +24,14 @@ export interface Patient {
   allergiesList?: string[];
   hereditary?: string;
   insurance?: string;
-  insuranceStatus?: 'Active' | 'Pre-authorization' | 'Inactive';
+  insuranceStatus?: "Active" | "Pre-authorization" | "Inactive";
   pathologicalHistory?: string;
   surgicalHistory?: string;
   lifestyle?: {
-    smoking: 'Never' | 'Occasional' | 'Frequent' | 'Ex-smoker';
-    alcohol: 'Never' | 'Occasional' | 'Frequent';
-    activity: 'Sedentary' | 'Moderate' | 'Active';
-    sleep: 'Good' | 'Regular' | 'Poor';
+    smoking: "Never" | "Occasional" | "Frequent" | "Ex-smoker";
+    alcohol: "Never" | "Occasional" | "Frequent";
+    activity: "Sedentary" | "Moderate" | "Active";
+    sleep: "Good" | "Regular" | "Poor";
   };
   latestVitals?: VitalSigns;
   vaccinations?: {
@@ -58,7 +58,7 @@ export interface AuditLog {
   ip: string;
   ua: string;
   time: string;
-  type: 'read' | 'write' | 'create' | 'export' | 'alert' | 'sign';
+  type: "read" | "write" | "create" | "export" | "alert" | "sign";
 }
 
 export interface CIE10 {

@@ -15,7 +15,10 @@ export const auditRouter = Router();
 auditRouter.get("/api/audit_logs", authenticateToken, requireRole("ADMIN"), async (req: AuthenticatedRequest, res) => {
   const clinicId = req.user!.clinicId; // IDOR fix
   try {
-    const filtered = mockAuditLogs.filter((l) => l.clinic_id === clinicId).slice(-50).reverse();
+    const filtered = mockAuditLogs
+      .filter((l) => l.clinic_id === clinicId)
+      .slice(-50)
+      .reverse();
     res.json(filtered);
   } catch (err: any) {
     res.status(500).json({ error: "Internal server error" });

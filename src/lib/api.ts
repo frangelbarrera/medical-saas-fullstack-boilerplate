@@ -13,9 +13,9 @@ export const setCsrfToken = (token: string | null) => {
 
 const getCsrfTokenFromCookie = (): string | null => {
   const match = document.cookie
-    .split('; ')
-    .find((c) => c.startsWith('csrf_token=') || c.startsWith('__Host-csrf_token='));
-  return match ? decodeURIComponent(match.split('=')[1]) : null;
+    .split("; ")
+    .find((c) => c.startsWith("csrf_token=") || c.startsWith("__Host-csrf_token="));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
 };
 
 async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
@@ -68,15 +68,12 @@ export const api = {
   },
   clinics: {
     get: (id: string) => request(`/clinics/${id}`),
-    update: (id: string, data: any) =>
-      request(`/clinics/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    update: (id: string, data: any) => request(`/clinics/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   },
   users: {
-    list: (clinicId: string, role?: string) =>
-      request(`/users?clinicId=${clinicId}${role ? `&role=${role}` : ""}`),
+    list: (clinicId: string, role?: string) => request(`/users?clinicId=${clinicId}${role ? `&role=${role}` : ""}`),
     create: (data: any) => request("/users", { method: "POST", body: JSON.stringify(data) }),
-    update: (id: string, data: any) =>
-      request(`/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    update: (id: string, data: any) => request(`/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (id: string) => request(`/users/${id}`, { method: "DELETE" }),
   },
   patients: {
@@ -84,8 +81,7 @@ export const api = {
       request(`/patients?clinicId=${clinicId}${doctorId ? `&doctorId=${doctorId}` : ""}`),
     get: (id: string) => request(`/patients/${id}`),
     create: (data: any) => request("/patients", { method: "POST", body: JSON.stringify(data) }),
-    update: (id: string, data: any) =>
-      request(`/patients/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    update: (id: string, data: any) => request(`/patients/${id}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (id: string) => request(`/patients/${id}`, { method: "DELETE" }),
     getConsultations: (id: string) => request(`/patients/${id}/consultations`),
     createConsultation: (id: string, data: any) =>
@@ -117,8 +113,7 @@ export const api = {
     create: (data: any) => request("/expenses", { method: "POST", body: JSON.stringify(data) }),
   },
   payments: {
-    createOrder: (data: any) =>
-      request("/payments/create-order", { method: "POST", body: JSON.stringify(data) }),
+    createOrder: (data: any) => request("/payments/create-order", { method: "POST", body: JSON.stringify(data) }),
   },
   ai: {
     processConsultation: (_audioBlob: Blob) => {
@@ -126,11 +121,9 @@ export const api = {
     },
   },
   aiChats: {
-    list: (clinicId: string, userId: string) =>
-      request(`/ai_chats?clinicId=${clinicId}&userId=${userId}`),
+    list: (clinicId: string, userId: string) => request(`/ai_chats?clinicId=${clinicId}&userId=${userId}`),
     create: (data: any) => request("/ai_chats", { method: "POST", body: JSON.stringify(data) }),
-    update: (id: string, data: any) =>
-      request(`/ai_chats/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    update: (id: string, data: any) => request(`/ai_chats/${id}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (id: string) => request(`/ai_chats/${id}`, { method: "DELETE" }),
   },
 };

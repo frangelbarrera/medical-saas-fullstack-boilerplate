@@ -77,8 +77,7 @@ describe("AES-256-GCM encryption", () => {
     const ciphertext = encryptPHI("secret");
     const parts = ciphertext.split(":");
     // Flip a bit in the ciphertext
-    const tamperedCiphertext =
-      (parseInt(parts[2][0], 16) ^ 1).toString(16) + parts[2].slice(1);
+    const tamperedCiphertext = (parseInt(parts[2][0], 16) ^ 1).toString(16) + parts[2].slice(1);
     const tampered = `${parts[0]}:${parts[1]}:${tamperedCiphertext}`;
     expect(() => decryptPHI(tampered)).toThrow();
   });

@@ -24,7 +24,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
   const [currentChatId, setCurrentChatId] = useState<string | null>(localStorage.getItem("lastAIChatId"));
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
-  
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<any>(null);
 
@@ -38,7 +38,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
     try {
       const chatList = await api.aiChats.list(clinicId, user.id);
       setChats(chatList);
-      
+
       if (!currentChatId && chatList.length > 0) {
         handleSelectChat(chatList[0].id, chatList[0].messages);
       } else if (currentChatId) {
@@ -87,15 +87,17 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
 
   const createNewChat = async () => {
     if (!user || !clinicId) return;
-    
-    const initialMsgs = [{ role: "bot", text: "Hello! I'm your Medical AI Assistant. How can I help you in this new consultation?" }];
+
+    const initialMsgs = [
+      { role: "bot", text: "Hello! I'm your Medical AI Assistant. How can I help you in this new consultation?" },
+    ];
     const newChat = await api.aiChats.create({
       userId: user.id,
       clinicId,
       title: "New Consultation",
-      messages: initialMsgs
+      messages: initialMsgs,
     });
-    
+
     handleSelectChat(newChat.id, initialMsgs);
   };
 
@@ -103,7 +105,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
     e.stopPropagation();
     const confirmed = window.confirm("Are you sure you want to delete this chat?");
     if (!confirmed) return;
-    
+
     try {
       await api.aiChats.delete(id);
       if (currentChatId === id) {
@@ -136,7 +138,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
 
   const handleSend = async () => {
     if (!input.trim() || isThinking || !chatRef.current || !user || !clinicId) return;
-    
+
     const userMsg = input.trim();
     const newMessages = [...messages, { role: "user" as const, text: userMsg }];
     setMessages(newMessages);
@@ -147,7 +149,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
     try {
       chatRef.current = createAIChat("", newMessages.slice(0, -1));
       let response = await chatRef.current.sendMessage(userMsg);
-      
+
       while (response.functionCalls) {
         const results: any[] = [];
         for (const call of response.functionCalls) {
@@ -157,8 +159,8 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
             results.push({
               functionResponse: {
                 name: fnName,
-                response: result
-              }
+                response: result,
+              },
             });
           }
         }
@@ -172,14 +174,14 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
       if (currentChatId) {
         await api.aiChats.update(currentChatId, {
           messages: finalMessages,
-          ...(messages.length <= 1 ? { title: userMsg.substring(0, 30) + (userMsg.length > 30 ? "..." : "") } : {})
+          ...(messages.length <= 1 ? { title: userMsg.substring(0, 30) + (userMsg.length > 30 ? "..." : "") } : {}),
         });
       } else {
         const newChat = await api.aiChats.create({
           userId: user.id,
           clinicId,
           title: userMsg.substring(0, 30),
-          messages: finalMessages
+          messages: finalMessages,
         });
         setCurrentChatId(newChat.id);
         localStorage.setItem("lastAIChatId", newChat.id);
@@ -187,7 +189,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
       fetchChats();
     } catch (error: any) {
       console.error("IA Error:", error);
-      setMessages(prev => [...prev, { role: "bot", text: `Error: ${error.message}` }]);
+      setMessages((prev) => [...prev, { role: "bot", text: `Error: ${error.message}` }]);
     } finally {
       setIsThinking(false);
     }
@@ -198,9 +200,9 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 20 }}
-      transition={{ 
+      transition={{
         duration: 0.5,
-        ease: [0.16, 1, 0.3, 1] 
+        ease: [0.16, 1, 0.3, 1],
       }}
       style={{
         width: "100%",
@@ -214,25 +216,33 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        position: "relative"
+        position: "relative",
       }}
     >
       {/* Header */}
-      <div style={{ padding: "20px 24px 16px", borderBottom: `1px solid ${glass.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div
+        style={{
+          padding: "20px 24px 16px",
+          borderBottom: `1px solid ${glass.border}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div>
             <p style={{ fontSize: 16, fontWeight: 700, color: text1 }}>AI CONSULTATION</p>
-            <button 
+            <button
               onClick={() => setShowHistory(true)}
-              style={{ 
-                display: "flex", 
-                alignItems: "center", 
-                gap: 6, 
-                marginTop: 4, 
-                background: "none", 
-                border: "none", 
-                cursor: "pointer", 
-                padding: 0 
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                marginTop: 4,
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 0,
               }}
             >
               <Ico name="History" size={12} color={accent} />
@@ -240,14 +250,26 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
             </button>
           </div>
         </div>
-        <button 
-          onClick={onToggle} 
-          style={{ width: 32, height: 32, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: `1px solid ${glass.border}`, cursor: "pointer", color: text2, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}
-          onMouseEnter={e => {
+        <button
+          onClick={onToggle}
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            background: "rgba(255,255,255,0.05)",
+            border: `1px solid ${glass.border}`,
+            cursor: "pointer",
+            color: text2,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            transition: "all 0.2s",
+          }}
+          onMouseEnter={(e) => {
             e.currentTarget.style.background = "rgba(255,255,255,0.1)";
             e.currentTarget.style.transform = "scale(1.05)";
           }}
-          onMouseLeave={e => {
+          onMouseLeave={(e) => {
             e.currentTarget.style.background = "rgba(255,255,255,0.05)";
             e.currentTarget.style.transform = "scale(1)";
           }}
@@ -257,40 +279,66 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
       </div>
 
       {/* Messages Area */}
-      <div ref={scrollRef} style={{ flex: 1, padding: "24px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 20, scrollBehavior: "smooth" }}>
+      <div
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          padding: "24px",
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: 20,
+          scrollBehavior: "smooth",
+        }}
+      >
         {messages.map((m, i) => (
-          <motion.div 
-            key={i} 
+          <motion.div
+            key={i}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3 }}
             style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%" }}
           >
-            <div style={{
-              padding: "12px 18px",
-              borderRadius: 14,
-              background: m.role === "user" ? "rgba(255, 255, 255, 0.08)" : "rgba(255, 255, 255, 0.04)",
-              border: `1px solid ${m.role === "user" ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.08)"}`,
-              color: text1,
-              fontSize: 13,
-              lineHeight: 1.5,
-              fontWeight: 500,
-              boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-              backdropFilter: "blur(8px)",
-              WebkitBackdropFilter: "blur(8px)",
-            }}>
+            <div
+              style={{
+                padding: "12px 18px",
+                borderRadius: 14,
+                background: m.role === "user" ? "rgba(255, 255, 255, 0.08)" : "rgba(255, 255, 255, 0.04)",
+                border: `1px solid ${m.role === "user" ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.08)"}`,
+                color: text1,
+                fontSize: 13,
+                lineHeight: 1.5,
+                fontWeight: 500,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+              }}
+            >
               {m.text}
             </div>
           </motion.div>
         ))}
         {isThinking && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            style={{ alignSelf: "flex-start", display: "flex", gap: 6, padding: "10px 16px", borderRadius: 12, background: "rgba(255,255,255,0.02)", border: `1px solid ${glass.border}` }}
+            style={{
+              alignSelf: "flex-start",
+              display: "flex",
+              gap: 6,
+              padding: "10px 16px",
+              borderRadius: 12,
+              background: "rgba(255,255,255,0.02)",
+              border: `1px solid ${glass.border}`,
+            }}
           >
-            {[0, 1, 2].map(dot => (
-              <motion.div key={dot} animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1, delay: dot * 0.2 }} style={{ width: 4, height: 4, borderRadius: "50%", background: text3 }} />
+            {[0, 1, 2].map((dot) => (
+              <motion.div
+                key={dot}
+                animate={{ opacity: [0.3, 1, 0.3] }}
+                transition={{ repeat: Infinity, duration: 1, delay: dot * 0.2 }}
+                style={{ width: 4, height: 4, borderRadius: "50%", background: text3 }}
+              />
             ))}
           </motion.div>
         )}
@@ -301,47 +349,47 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
         <div style={{ display: "flex", gap: 12, alignItems: "center", maxWidth: 900, margin: "0 auto" }}>
           <input
             value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && handleSend()}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSend()}
             placeholder="Write your medical or administrative query..."
-            style={{ 
-              flex: 1, 
-              padding: "12px 16px", 
-              borderRadius: 12, 
-              background: glass.input, 
-              border: `1px solid ${glass.border}`, 
-              color: text1, 
-              fontSize: 13, 
-              outline: "none", 
+            style={{
+              flex: 1,
+              padding: "12px 16px",
+              borderRadius: 12,
+              background: glass.input,
+              border: `1px solid ${glass.border}`,
+              color: text1,
+              fontSize: 13,
+              outline: "none",
               transition: "all 0.2s",
-              fontFamily: "inherit"
+              fontFamily: "inherit",
             }}
-            onFocus={e => {
+            onFocus={(e) => {
               e.currentTarget.style.borderColor = "rgba(255,255,255,0.3)";
               e.currentTarget.style.background = "rgba(255,255,255,0.05)";
             }}
-            onBlur={e => {
+            onBlur={(e) => {
               e.currentTarget.style.borderColor = glass.border;
               e.currentTarget.style.background = glass.input;
             }}
           />
           <button
             onClick={handleSend}
-            style={{ 
-              width: 36, 
-              height: 36, 
-              borderRadius: 10, 
-              background: "rgba(255,255,255,0.95)", 
-              border: "none", 
-              cursor: "pointer", 
-              display: "flex", 
-              alignItems: "center", 
-              justifyContent: "center", 
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: "rgba(255,255,255,0.95)",
+              border: "none",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
               transition: "all 0.2s",
-              flexShrink: 0
+              flexShrink: 0,
             }}
-            onMouseEnter={e => e.currentTarget.style.transform = "scale(1.05)"}
-            onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
+            onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.05)")}
+            onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
           >
             <Ico name="Send" size={16} color="#000" stroke={2.5} />
           </button>
@@ -369,32 +417,35 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
               zIndex: 100,
               display: "flex",
               flexDirection: "column",
-              padding: 24
+              padding: 24,
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
               <p style={{ fontSize: 18, fontWeight: 700, color: text1 }}>History</p>
-              <button onClick={() => setShowHistory(false)} style={{ background: "none", border: "none", color: text3, cursor: "pointer" }}>
+              <button
+                onClick={() => setShowHistory(false)}
+                style={{ background: "none", border: "none", color: text3, cursor: "pointer" }}
+              >
                 <Ico name="X" size={20} />
               </button>
             </div>
 
-            <button 
+            <button
               onClick={createNewChat}
-              style={{ 
-                width: "100%", 
-                padding: "12px", 
-                borderRadius: 12, 
-                background: accent, 
-                color: "#000", 
-                border: "none", 
-                fontWeight: 700, 
-                marginBottom: 20, 
+              style={{
+                width: "100%",
+                padding: "12px",
+                borderRadius: 12,
+                background: accent,
+                color: "#000",
+                border: "none",
+                fontWeight: 700,
+                marginBottom: 20,
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: 8
+                gap: 8,
               }}
             >
               <Ico name="Plus" size={16} color="#000" />
@@ -402,45 +453,54 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
             </button>
 
             <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-              {chats.map(chat => (
-                <div 
+              {chats.map((chat) => (
+                <div
                   key={chat.id}
                   onClick={() => handleSelectChat(chat.id, chat.messages)}
-                  style={{ 
-                    padding: "12px 16px", 
-                    borderRadius: 10, 
-                    background: currentChatId === chat.id ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.03)", 
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: 10,
+                    background: currentChatId === chat.id ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.03)",
                     border: `1px solid ${currentChatId === chat.id ? accent : "transparent"}`,
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
-                    transition: "all 0.2s"
+                    transition: "all 0.2s",
                   }}
                 >
                   <div style={{ flex: 1, overflow: "hidden" }}>
                     {editingChatId === chat.id ? (
-                      <input 
+                      <input
                         autoFocus
                         value={editTitle}
-                        onChange={e => setEditTitle(e.target.value)}
+                        onChange={(e) => setEditTitle(e.target.value)}
                         onBlur={() => saveRename(chat.id)}
-                        onKeyDown={e => e.key === "Enter" && saveRename(chat.id)}
-                        onClick={e => e.stopPropagation()}
-                        style={{ 
-                          width: "100%", 
-                          background: "rgba(255,255,255,0.1)", 
-                          border: `1px solid ${accent}`, 
-                          color: text1, 
-                          fontSize: 13, 
-                          padding: "4px 8px", 
+                        onKeyDown={(e) => e.key === "Enter" && saveRename(chat.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          width: "100%",
+                          background: "rgba(255,255,255,0.1)",
+                          border: `1px solid ${accent}`,
+                          color: text1,
+                          fontSize: 13,
+                          padding: "4px 8px",
                           borderRadius: 4,
-                          outline: "none"
+                          outline: "none",
                         }}
                       />
                     ) : (
                       <>
-                        <p style={{ fontSize: 13, color: text1, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <p
+                          style={{
+                            fontSize: 13,
+                            color: text1,
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
                           {chat.title || "Untitled"}
                         </p>
                         <p style={{ fontSize: 10, color: text3 }}>{chat.updatedAt?.toDate?.().toLocaleDateString()}</p>
@@ -448,10 +508,16 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
                     )}
                   </div>
                   <div style={{ display: "flex", gap: 4 }}>
-                    <button onClick={(e) => startRename(chat, e)} style={{ background: "none", border: "none", color: text3, cursor: "pointer", padding: 4 }}>
+                    <button
+                      onClick={(e) => startRename(chat, e)}
+                      style={{ background: "none", border: "none", color: text3, cursor: "pointer", padding: 4 }}
+                    >
                       <Ico name="Pencil" size={14} />
                     </button>
-                    <button onClick={(e) => deleteChat(chat.id, e)} style={{ background: "none", border: "none", color: danger, cursor: "pointer", padding: 4 }}>
+                    <button
+                      onClick={(e) => deleteChat(chat.id, e)}
+                      style={{ background: "none", border: "none", color: danger, cursor: "pointer", padding: 4 }}
+                    >
                       <Ico name="Trash2" size={14} />
                     </button>
                   </div>
@@ -474,7 +540,7 @@ export const AIChatButton: React.FC<{ onToggle: () => void }> = ({ onToggle }) =
         y: [0, -10, 0],
       }}
       transition={{
-        y: { duration: 5, repeat: Infinity, ease: "easeInOut" }
+        y: { duration: 5, repeat: Infinity, ease: "easeInOut" },
       }}
       onClick={onToggle}
       style={{
@@ -485,53 +551,85 @@ export const AIChatButton: React.FC<{ onToggle: () => void }> = ({ onToggle }) =
         height: 72,
         borderRadius: "50%",
         background: "linear-gradient(145deg, #ffffff, #f0f2f5)",
-        boxShadow: "0 15px 35px rgba(0,0,0,0.4), inset 0 -4px 8px rgba(0,0,0,0.05), inset 0 4px 8px rgba(255,255,255,1)",
+        boxShadow:
+          "0 15px 35px rgba(0,0,0,0.4), inset 0 -4px 8px rgba(0,0,0,0.05), inset 0 4px 8px rgba(255,255,255,1)",
         cursor: "pointer",
         zIndex: 2001,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        border: "1px solid rgba(255,255,255,0.8)"
+        border: "1px solid rgba(255,255,255,0.8)",
       }}
     >
-      <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, marginTop: -2 }}>
           <div style={{ display: "flex", gap: 10 }}>
             <motion.div
               animate={{ scaleY: [1, 0.1, 1] }}
               transition={{ duration: 0.2, repeat: Infinity, repeatDelay: 4 }}
-              style={{ 
-                width: 11, 
-                height: 15, 
-                borderRadius: "50%", 
-                background: "#1a202c", 
+              style={{
+                width: 11,
+                height: 15,
+                borderRadius: "50%",
+                background: "#1a202c",
                 position: "relative",
-                boxShadow: "inset 0 1px 2px rgba(0,0,0,0.5)"
+                boxShadow: "inset 0 1px 2px rgba(0,0,0,0.5)",
               }}
             >
-              <div style={{ position: "absolute", top: 3, right: 2, width: 3.5, height: 3.5, borderRadius: "50%", background: "#fff", opacity: 0.9 }} />
+              <div
+                style={{
+                  position: "absolute",
+                  top: 3,
+                  right: 2,
+                  width: 3.5,
+                  height: 3.5,
+                  borderRadius: "50%",
+                  background: "#fff",
+                  opacity: 0.9,
+                }}
+              />
             </motion.div>
             <motion.div
               animate={{ scaleY: [1, 0.1, 1] }}
               transition={{ duration: 0.2, repeat: Infinity, repeatDelay: 4 }}
-              style={{ 
-                width: 11, 
-                height: 15, 
-                borderRadius: "50%", 
-                background: "#1a202c", 
+              style={{
+                width: 11,
+                height: 15,
+                borderRadius: "50%",
+                background: "#1a202c",
                 position: "relative",
-                boxShadow: "inset 0 1px 2px rgba(0,0,0,0.5)"
+                boxShadow: "inset 0 1px 2px rgba(0,0,0,0.5)",
               }}
             >
-              <div style={{ position: "absolute", top: 3, right: 2, width: 3.5, height: 3.5, borderRadius: "50%", background: "#fff", opacity: 0.9 }} />
+              <div
+                style={{
+                  position: "absolute",
+                  top: 3,
+                  right: 2,
+                  width: 3.5,
+                  height: 3.5,
+                  borderRadius: "50%",
+                  background: "#fff",
+                  opacity: 0.9,
+                }}
+              />
             </motion.div>
           </div>
           <svg width="22" height="10" viewBox="0 0 22 10" fill="none" style={{ marginTop: 2 }}>
-            <path 
-              d="M4 2C6 5.5 10 7 11 7C12 7 16 5.5 18 2" 
-              stroke="#1a202c" 
-              strokeWidth="2.5" 
-              strokeLinecap="round" 
+            <path
+              d="M4 2C6 5.5 10 7 11 7C12 7 16 5.5 18 2"
+              stroke="#1a202c"
+              strokeWidth="2.5"
+              strokeLinecap="round"
               opacity="0.85"
             />
           </svg>

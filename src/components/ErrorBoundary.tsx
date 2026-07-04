@@ -14,7 +14,7 @@ interface State {
 export class ErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
-    errorInfo: null
+    errorInfo: null,
   };
 
   public static getDerivedStateFromError(error: Error): State {
@@ -34,24 +34,53 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       const info = this.state.errorInfo;
       return (
-        <div style={{ height: "100vh", width: "100vw", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.8)", backdropFilter: "blur(20px)" }}>
+        <div
+          style={{
+            height: "100vh",
+            width: "100vw",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.8)",
+            backdropFilter: "blur(20px)",
+          }}
+        >
           <GCard style={{ maxWidth: 500, padding: 32, textAlign: "center", border: `1px solid ${danger}44` }}>
             <h2 style={{ color: danger, fontSize: 24, marginBottom: 16 }}>System Error</h2>
             <p style={{ color: text1, marginBottom: 24 }}>
               Sorry, an unexpected error occurred in the communication with the database.
             </p>
             {info && (
-              <div style={{ textAlign: "left", background: glass.input, padding: 16, borderRadius: 12, border: `1px solid ${glass.border}` }}>
+              <div
+                style={{
+                  textAlign: "left",
+                  background: glass.input,
+                  padding: 16,
+                  borderRadius: 12,
+                  border: `1px solid ${glass.border}`,
+                }}
+              >
                 <p style={{ fontSize: 12, color: text2, fontFamily: "var(--font-sans)" }}>
-                  <strong>Operation:</strong> {info.operationType || "N/A"}<br />
-                  <strong>Path:</strong> {info.path || "N/A"}<br />
+                  <strong>Operation:</strong> {info.operationType || "N/A"}
+                  <br />
+                  <strong>Path:</strong> {info.path || "N/A"}
+                  <br />
                   <strong>Error:</strong> {info.error}
                 </p>
               </div>
             )}
             <button
               onClick={() => window.location.reload()}
-              style={{ marginTop: 32, padding: "12px 24px", borderRadius: 8, background: text1, color: "#000", fontWeight: 700, border: "none", cursor: "pointer" }}
+              style={{
+                marginTop: 32,
+                padding: "12px 24px",
+                borderRadius: 8,
+                background: text1,
+                color: "#000",
+                fontWeight: 700,
+                border: "none",
+                cursor: "pointer",
+              }}
             >
               Reload Application
             </button>

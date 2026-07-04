@@ -58,7 +58,7 @@ export async function createApp(): Promise<express.Application> {
       verify: (req: any, _res, buf) => {
         req.rawBody = buf;
       },
-    })
+    }),
   );
 
   // Swagger
