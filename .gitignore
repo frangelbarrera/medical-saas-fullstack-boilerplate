@@ -28,3 +28,12 @@ yarn-error.log*
 .DS_Store
 .idea/
 .vscode/
+
+# Prisma generated client (regenerated on npm install / prisma generate)
+# Note: we DO commit prisma/migrations/ — those are the source of truth for DB schema
+src/generated/
+
+# Playwright
+playwright-report/
+test-results/
+.playwright/

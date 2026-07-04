@@ -35,6 +35,8 @@ services:
       PGUSER: ${PGUSER:-postgres}
       PGPASSWORD: ${PGPASSWORD:?PGPASSWORD is required}
       PGDATABASE: ${PGDATABASE:-medical_saas_db}
+      # Prisma connection string
+      DATABASE_URL: postgresql://${PGUSER:-postgres}:${PGPASSWORD:?PGPASSWORD is required}@db:5432/${PGDATABASE:-medical_saas_db}?schema=public
       # Required secrets (no defaults - the app will crash if missing)
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (min 32 chars)}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required (64 hex chars)}

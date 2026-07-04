@@ -1,0 +1,261 @@
+// Prisma schema for Medical SaaS Boilerplate.
+//
+// This is the source of truth for the database schema in production. The
+// schema.sql file at the project root is kept for reference / manual setup
+// without Prisma, but Prisma migrations are the recommended path.
+//
+// Run `npx prisma migrate dev --name init` to create the first migration.
+// Run `npx prisma generate` to regenerate the client after schema changes.
+// Run `npx prisma studio` to browse data in dev.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum UserRole {
+  ADMIN
+  DOCTOR
+  SECRETARY
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  NOSHOW
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  CANCELLED
+  REFUNDED
+}
+
+// ==========================================
+// MODELS
+// ==========================================
+
+/// Clinic (tenant). Multi-tenant isolation is enforced at the app layer
+/// (every query filters by clinicId from the JWT) and at the DB layer via
+/// RLS policies (see schema.sql).
+model Clinic {
+  id        String   @id @default(uuid())
+  name      String
+  taxId     String?  @unique @map("tax_id")
+  address   String?
+  phone     String?
+  email     String?
+  logo      String?
+  ownerId   String?  @map("owner_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users         User[]
+  patients      Patient[]
+  appointments  Appointment[]
+  consultations Consultation[]
+  invoices      Invoice[]
+  expenses      Expense[]
+  aiChats       AiChat[]
+  auditLogs     AuditLog[]
+
+  @@map("clinics")
+}
+
+/// User with RBAC role. password_hash stores bcrypt output (cost 12).
+model User {
+  id               String    @id @default(uuid())
+  clinicId         String    @map("clinic_id")
+  username         String    @unique
+  passwordHash     String    @map("password_hash")
+  fullName         String    @map("full_name")
+  role             UserRole  @default(SECRETARY)
+  isActive         Boolean   @default(true) @map("is_active")
+  managedDoctorIds Json      @default("[]") @map("managed_doctor_ids")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  clinic        Clinic         @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patients      Patient[]      @relation("PatientDoctor")
+  appointments  Appointment[]  @relation("AppointmentDoctor")
+  consultations Consultation[] @relation("ConsultationDoctor")
+  invoices      Invoice[]      @relation("InvoiceDoctor")
+  expenses      Expense[]      @relation("ExpenseRegistrar")
+  aiChats       AiChat[]
+
+  @@index([clinicId])
+  @@map("users")
+}
+
+/// Patient. PHI fields (identification_number, phone, email, birth_date)
+/// store AES-256-GCM ciphertext (format: 'iv:authTag:ciphertext' hex).
+/// Typed as String (not VARCHAR(N)) to avoid truncation.
+model Patient {
+  id                 String   @id @default(uuid())
+  clinicId           String   @map("clinic_id")
+  identificationNumber String @map("identification_number") // AES-256-GCM ciphertext
+  name               String   // not encrypted: needed for search/list
+  birthDate          String?  @map("birth_date") // AES-256-GCM ciphertext
+  gender             String?
+  phone              String?  // AES-256-GCM ciphertext
+  email              String?  // AES-256-GCM ciphertext
+  status             String   @default("Active")
+  doctorId           String?  @map("doctor_id")
+  extraData          Json     @default("{}") @map("extra_data")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  clinic        Clinic         @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor        User?          @relation("PatientDoctor", fields: [doctorId], references: [id], onDelete: SetNull)
+  appointments  Appointment[]
+  consultations Consultation[]
+  invoices      Invoice[]
+
+  @@unique([clinicId, identificationNumber])
+  @@index([clinicId])
+  @@index([doctorId])
+  @@map("patients")
+}
+
+/// Appointment (agenda entry).
+model Appointment {
+  id        String            @id @default(uuid())
+  clinicId  String            @map("clinic_id")
+  patientId String            @map("patient_id")
+  doctorId  String            @map("doctor_id")
+  startTime DateTime          @map("start_time")
+  endTime   DateTime          @map("end_time")
+  status    AppointmentStatus @default(SCHEDULED)
+  reason    String?
+  createdAt DateTime          @default(now()) @map("created_at")
+
+  clinic Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor User    @relation("AppointmentDoctor", fields: [doctorId], references: [id], onDelete: Restrict)
+  consultation Consultation?
+
+  @@index([clinicId])
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([startTime])
+  @@map("appointments")
+}
+
+/// Consultation (EHR entry). Stores diagnosis (ICD-10), prescription,
+/// vital signs, and evolution notes.
+model Consultation {
+  id             String   @id @default(uuid())
+  clinicId       String   @map("clinic_id")
+  patientId      String   @map("patient_id")
+  doctorId       String   @map("doctor_id")
+  appointmentId  String?  @unique @map("appointment_id")
+  date           DateTime @default(now())
+  reason         String?
+  evolution      String?
+  vitalSigns     Json?    @map("vital_signs")
+  diagnosisCie10 Json?    @map("diagnosis_cie10")
+  prescription   Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  clinic      Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient     Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor      User         @relation("ConsultationDoctor", fields: [doctorId], references: [id], onDelete: Restrict)
+  appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([patientId])
+  @@index([doctorId])
+  @@map("consultations")
+}
+
+/// Invoice (billing).
+model Invoice {
+  id               String       @id @default(uuid())
+  clinicId         String       @map("clinic_id")
+  patientId        String       @map("patient_id")
+  doctorId         String?      @map("doctor_id")
+  concept          String
+  amount           Decimal      @db.Decimal(10, 2)
+  paymentMethod    String?      @map("payment_method")
+  status           InvoiceStatus @default(PENDING)
+  insuranceCompany String?      @map("insurance_company")
+  date             DateTime     @default(now())
+  createdAt        DateTime     @default(now()) @map("created_at")
+
+  clinic  Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  User?   @relation("InvoiceDoctor", fields: [doctorId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([patientId])
+  @@map("invoices")
+}
+
+/// Expense (clinic operational expense).
+model Expense {
+  id           String   @id @default(uuid())
+  clinicId     String   @map("clinic_id")
+  concept      String
+  category     String?
+  amount       Decimal  @db.Decimal(10, 2)
+  date         DateTime @default(now())
+  registeredBy String   @map("registered_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  registrar User @relation("ExpenseRegistrar", fields: [registeredBy], references: [id], onDelete: Restrict)
+
+  @@index([clinicId])
+  @@map("expenses")
+}
+
+/// AI Chat (per-user, per-clinic). Messages stored as JSON array.
+model AiChat {
+  id        String   @id @default(uuid())
+  clinicId  String   @map("clinic_id")
+  userId    String   @map("user_id")
+  title     String?
+  messages  Json     @default("[]")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, userId])
+  @@map("ai_chats")
+}
+
+/// Audit log (append-only, tamper-evident hash chain).
+/// REVOKE UPDATE, DELETE in production to enforce immutability.
+model AuditLog {
+  id        String   @id @default(uuid())
+  clinicId  String   @map("clinic_id")
+  userId    String?  @map("user_id")
+  userName  String?  @map("user_name")
+  action    String
+  target    String?
+  type      String?
+  details   Json     @default("{}")
+  sourceIp  String?  @map("source_ip")
+  userAgent String?  @map("user_agent")
+  prevHash  String?  @map("prev_hash")
+  hash      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
