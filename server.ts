@@ -20,34 +20,45 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- ALE (Application-Level Encryption) Configuration ---
-// In a real scenario, ENCRYPTION_KEY must be stored in a Vault (e.g., AWS Secrets Manager).
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.createHash('sha256').update('DEFAULT_DEV_KEY_NOT_FOR_PROD').digest('hex'); // 256-bit key
-const IV_LENGTH = 16; 
+// AES-256-GCM provides authenticated encryption (AEAD): confidentiality + integrity.
+// The auth tag prevents ciphertext tampering (mitigates padding oracle / bit-flipping attacks).
+// The ENCRYPTION_KEY is sourced from the validated env (env.server.ts) and MUST be 32 bytes (64 hex chars).
+const ENCRYPTION_KEY = Buffer.from(env.ENCRYPTION_KEY, 'hex'); // 256-bit key
+const IV_LENGTH = 12; // 96-bit IV is recommended for GCM
 
 const encryptPHI = (text: string): string => {
   if (!text) return text;
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-  let encrypted = cipher.update(text);
+  const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  let encrypted = cipher.update(text, 'utf8');
   encrypted = Buffer.concat([encrypted, cipher.final()]);
-  return iv.toString('hex') + ':' + encrypted.toString('hex');
+  const authTag = cipher.getAuthTag();
+  // Format: iv:authTag:ciphertext (all hex)
+  return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted.toString('hex');
 };
 
 const decryptPHI = (text: string): string => {
   if (!text) return text;
   try {
-    const textParts = text.split(':');
-    const ivHex = textParts.shift();
-    if (!ivHex) return text; // Not encrypted
+    const parts = text.split(':');
+    // Legacy CBC format was iv:ciphertext (2 parts). GCM format is iv:authTag:ciphertext (3 parts).
+    if (parts.length !== 3) {
+      // Not a GCM ciphertext. Return as-is (legacy/mock data passthrough).
+      return text;
+    }
+    const [ivHex, authTagHex, ciphertextHex] = parts;
     const iv = Buffer.from(ivHex, 'hex');
-    const encryptedText = Buffer.from(textParts.join(':'), 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-    let decrypted = decipher.update(encryptedText);
+    const authTag = Buffer.from(authTagHex, 'hex');
+    const ciphertext = Buffer.from(ciphertextHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(ciphertext);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
-    return decrypted.toString();
+    return decrypted.toString('utf8');
   } catch (e) {
-    // If decryption fails, it might not be encrypted in the mock data, return raw text or indicate failure.
-    return text;
+    // Auth tag verification failed OR ciphertext corrupted: never return partial/decrypted data.
+    // Returning the raw text here would silently bypass integrity. Throw instead.
+    throw new Error('PHI decryption failed: ciphertext integrity check failed');
   }
 };
 
