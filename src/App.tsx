@@ -64,51 +64,6 @@ export default function App() {
   const [secretaryOpen, setSecretaryOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const retryCount = useRef(0);
-  const [bgIndex, setBgIndex] = useState(() => {
-    const saved = localStorage.getItem("medisaas_bg_index");
-    return saved ? parseInt(saved, 10) : 1;
-  });
-  const [displayedBgIndex, setDisplayedBgIndex] = useState(bgIndex);
-
-  const nextBg = () => {
-    setBgIndex(prev => {
-      const next = prev >= 10 ? 1 : prev + 1;
-      localStorage.setItem("medisaas_bg_index", next.toString());
-      return next;
-    });
-  };
-
-  // Validate background existence and skip if missing
-  useEffect(() => {
-    let active = true;
-    let timer: any;
-    const img = new Image();
-    img.src = `/fondo${bgIndex}.jpg`;
-    img.onload = () => {
-      if (active) {
-        retryCount.current = 0; // Reset on success
-        setDisplayedBgIndex(bgIndex); // Only update displayed image when loaded
-      }
-    };
-    img.onerror = () => {
-      if (!active) return;
-      if (retryCount.current >= 10) {
-        console.error("No background images found in /public folder.");
-        return;
-      }
-      retryCount.current++;
-      console.warn(`Background /fondo${bgIndex}.jpg not found, skipping...`);
-      // Automatically try the next one after a short delay
-      timer = setTimeout(() => {
-        nextBg();
-      }, 100);
-    };
-    return () => { 
-      active = false; 
-      if (timer) clearTimeout(timer);
-    };
-  }, [bgIndex]);
 
   useEffect(() => {
     if (!globalSearch || globalSearch.length < 2 || !clinicId) {
@@ -266,12 +221,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <div style={{ height: "100vh", width: "100vw", display: "flex", alignItems: "center", justifyContent: "center", background: "#050505" }}>
-        <div style={{ position: "absolute", inset: 0, opacity: 0.4 }}>
-          <video autoPlay loop muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }}>
-            <source src="/background.mp4" type="video/mp4" />
-          </video>
-        </div>
+      <div style={{ height: "100vh", width: "100vw", display: "flex", alignItems: "center", justifyContent: "center", background: "radial-gradient(ellipse at top, #0a0f1e 0%, #050505 70%)" }}>
         <GCard style={{ maxWidth: 360, padding: 32, textAlign: "center", position: "relative", zIndex: 10 }}>
           <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(255,255,255,0.1)", border: `1px solid ${glass.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", boxShadow: glass.shadow }}>
             <Ico name="Heart" size={28} color={text1} stroke={2} />
@@ -397,23 +347,7 @@ export default function App() {
       }}>
         <Toaster theme="dark" position="bottom-right" richColors />
         <div style={{ display: "flex", height: "100vh", width: "100vw", overflow: "hidden", fontFamily: "var(--font-sans)", position: "relative", color: text1 }}>
-          <div style={{ position: "absolute", inset: 0, zIndex: 0, background: "#000" }}>
-            <AnimatePresence initial={false} mode="wait">
-              <motion.div
-                key={displayedBgIndex}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 2, ease: "easeInOut" }}
-                style={{ 
-                  position: "absolute", 
-                  inset: 0, 
-                  backgroundImage: `url(/fondo${displayedBgIndex}.jpg)`, 
-                  backgroundSize: "cover", 
-                  backgroundPosition: "center"
-                }} 
-              />
-            </AnimatePresence>
+          <div style={{ position: "absolute", inset: 0, zIndex: 0, background: "radial-gradient(ellipse at top, #0a0f1e 0%, #050505 70%)" }}>
             <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)" }} />
           </div>
 
@@ -533,28 +467,6 @@ export default function App() {
                 <p style={{ fontSize: 12, fontWeight: 600, color: text2 }}>New York General Hospital</p>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                <button
-                  onClick={nextBg}
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: 10,
-                    background: "rgba(255,255,255,0.05)",
-                    border: `1px solid ${glass.border}`,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    transition: "all 0.2s",
-                    opacity: 0.6
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.background = "rgba(255,255,255,0.1)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.opacity = "0.6"; e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
-                  title="Change background"
-                >
-                  <Ico name="Pencil" size={14} color={text1} />
-                </button>
-
                 <div style={{ position: "relative" }}>
                   <div style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", zIndex: 10 }}><Ico name="Search" size={14} color={text3} /></div>
                   <input 
