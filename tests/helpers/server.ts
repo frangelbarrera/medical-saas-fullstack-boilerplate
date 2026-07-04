@@ -6,25 +6,27 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
- * Spawns the server.ts as a child process with test env vars and returns
- * a fetch client pointing at it. The caller MUST call `stop()` to clean up.
+ * Spawns the server as a child process with test env vars and returns a fetch
+ * client pointing at it.
  *
- * We spawn a child process because server.ts calls app.listen() at import time
- * and we cannot import it without binding to the port. Once server.ts is
- * refactored to export createApp(), we can switch to in-process supertest.
+ * The server is now refactored to export createApp() (see src/server/app.ts).
+ * For supertest-style in-process testing, import { createApp } directly from
+ * src/server/app.ts. This spawn helper is kept for end-to-end tests that need
+ * a real HTTP listener.
  */
 export async function startTestServer(port = 3999): Promise<{
   baseUrl: string;
   stop: () => Promise<void>;
   process: ChildProcess;
 }> {
-  // server.ts lives in the project root, two levels up from tests/helpers/
+  // server.ts is now a shim that imports src/server/index.ts
   const serverPath = path.join(__dirname, "..", "..", "server.ts");
 
   const child = spawn("npx", ["tsx", serverPath], {
     env: {
       ...process.env,
       NODE_ENV: "test",
+      START_SERVER: "1", // signal src/server/index.ts to actually listen
       PORT: String(port),
       PGHOST: "localhost",
       PGPORT: "5432",
@@ -82,7 +84,6 @@ export async function startTestServer(port = 3999): Promise<{
       new Promise<void>((resolve) => {
         child.kill("SIGTERM");
         child.on("exit", () => resolve());
-        // Force kill after 5s
         setTimeout(() => {
           child.kill("SIGKILL");
           resolve();
@@ -116,7 +117,10 @@ export async function login(
   }
 
   const setCookie = res.headers.get("set-cookie") || "";
-  const cookies = setCookie.split(",").map((c) => c.split(";")[0]).join("; ");
+  const cookies = setCookie
+    .split(",")
+    .map((c) => c.split(";")[0])
+    .join("; ");
   const data = (await res.json()) as any;
   return { cookies, csrfToken: data.csrfToken, user: data.user };
 }
