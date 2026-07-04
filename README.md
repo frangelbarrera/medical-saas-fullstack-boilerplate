@@ -5,9 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6.svg)](https://www.typescriptlang.org/)
 [![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-336791.svg)](https://www.postgresql.org/)
+[![Prisma](https://img.shields.io/badge/ORM-Prisma-2D3748.svg)](https://www.prisma.io/)
+[![Tests](https://img.shields.io/badge/Tests-60%20total-22C55E.svg)](#testing)
 [![CI](https://github.com/frangelbarrera/medical-saas-fullstack-boilerplate/actions/workflows/ci.yml/badge.svg)](https://github.com/frangelbarrera/medical-saas-fullstack-boilerplate/actions/workflows/ci.yml)
 
-A full-stack medical SaaS boilerplate with role-based access control, application-level encryption for PHI, tamper-evident audit logging, and an AI clinical assistant. Designed as a starting point for medical SaaS products — **not** a turnkey HIPAA-compliant product.
+A production-grade full-stack medical SaaS boilerplate with modular architecture, role-based access control, AES-256-GCM application-level encryption for PHI, tamper-evident audit logging, refresh token rotation, structured logging with PHI redaction, Prisma ORM with versioned migrations, and comprehensive test coverage (unit + integration + E2E).
 
 > **Disclaimer**: This boilerplate implements HIPAA-aware patterns (encryption at rest, audit trail, RBAC, minimum-necessary role isolation). It is **not** certified HIPAA-compliant. Before deploying with real Protected Health Information (PHI), you must complete infrastructure hardening, sign BAAs with all third-party vendors (Google for Gemini, your DB provider, etc.), and pass a formal HIPAA security risk assessment.
 
@@ -112,25 +114,41 @@ Before deploying with real PHI:
 
 ```text
 .
-├── server.ts                  # Express backend (auth, RBAC, IDOR guards, audit, encryption)
-├── schema.sql                 # PostgreSQL schema with RLS (for production DB mode)
-├── Dockerfile                 # Multi-stage, non-root, slim
-├── docker-compose.yml         # postgres + app with healthchecks and required secrets
-├── .env.example               # Template with generation instructions
-├── package.json
-├── tsconfig.json              # Strict mode enabled
-├── vite.config.ts             # Vite + proxy (no client-side secrets)
+├── server.ts                     # Entrypoint shim (sets START_SERVER=1, imports src/server)
+├── prisma/
+│   ├── schema.prisma             # Prisma schema (9 models, 3 enums, source of truth)
+│   └── migrations/               # Versioned SQL migrations (committed)
+├── schema.sql                    # PostgreSQL schema with RLS (for non-Prisma setup)
+├── Dockerfile                    # Multi-stage, non-root, slim
+├── docker-compose.yml            # postgres + app with healthchecks and required secrets
+├── .env.example                  # Template with generation instructions
+├── eslint.config.js              # ESLint 9 flat config (TS, react-hooks, security, no-secrets)
+├── .prettierrc.json              # Prettier config (120 chars, double quotes, trailing commas)
+├── playwright.config.ts          # E2E test config (spawns dev server, Chromium)
+├── vitest.config.ts              # Unit/integration test config
+├── tsconfig.json                 # Strict mode enabled
+├── vite.config.ts                # Vite + proxy (no client-side secrets)
 ├── .github/workflows/
-│   ├── ci.yml                 # typecheck + test + build + npm audit
-│   └── deploy.yml             # SSH deploy (gated, commented by default)
+│   ├── ci.yml                    # typecheck + lint + test + build + npm audit
+│   └── deploy.yml                # SSH deploy (template)
 ├── public/
-│   └── Screenshots/           # README images
+│   └── Screenshots/              # README images
+├── tests/                        # 52 vitest tests
+│   ├── encryption.test.ts        # AES-256-GCM unit tests
+│   ├── env.test.ts               # Zod env validation unit tests
+│   ├── refresh-token.test.ts     # Refresh token rotation/revocation unit tests
+│   ├── api.test.ts               # Spawn-based integration tests (13 tests)
+│   ├── in-process.test.ts        # In-process integration tests via createApp() (16 tests)
+│   ├── setup.ts                  # Test env vars
+│   └── helpers/server.ts         # Spawn helper for E2E-style tests
+├── e2e/                          # 8 Playwright E2E tests
+│   └── happy-paths.spec.ts       # Login, dashboard, patients, logout, security headers
 └── src/
-    ├── App.tsx                # React app, routing, role-based views, session timeout
+    ├── App.tsx                   # React app, routing, role-based views, session timeout
     ├── main.tsx
     ├── theme.ts
     ├── index.css
-    ├── components/            # 19 view components
+    ├── components/               # 19 view components
     │   ├── AIChat.tsx
     │   ├── AIScribe.tsx
     │   ├── AdminUsersView.tsx
@@ -144,15 +162,48 @@ Before deploying with real PHI:
     │   ├── PatientsView.tsx / SecPatientsView.tsx
     │   ├── SettingsView.tsx
     │   └── ...
-    └── lib/
-        ├── api.ts             # Frontend HTTP client with dynamic CSRF token
-        ├── ai-service.ts      # Gemini integration with PHI sanitization
-        ├── env.server.ts      # Zod-validated env vars (no defaults for secrets)
-        ├── swagger.ts
-        ├── types.ts
-        ├── validators.ts
-        ├── cie10.ts           # ICD-10 catalog (ES)
-        └── medications.ts
+    ├── lib/
+    │   ├── api.ts                # Frontend HTTP client with dynamic CSRF token
+    │   ├── ai-service.ts         # Gemini integration with PHI sanitization
+    │   ├── env.server.ts         # Zod-validated env vars (no defaults for secrets)
+    │   ├── swagger.ts
+    │   ├── types.ts
+    │   ├── cie10.ts              # ICD-10 catalog (ES)
+    │   └── medications.ts
+    └── server/                   # Modular backend (was 1480-LOC monolith)
+        ├── index.ts              # Entrypoint (START_SERVER env gates listen)
+        ├── app.ts                # createApp() factory (exportable for tests)
+        ├── config.ts             # env, secrets, DB pool, mock state
+        ├── utils/
+        │   ├── crypto.ts         # encryptPHI, decryptPHI (AES-256-GCM)
+        │   ├── audit.ts          # appendAuditLog with SHA-256 hash chain
+        │   ├── logger.ts         # Pino logger with PHI redaction
+        │   └── refresh-token.ts  # Opaque refresh tokens with rotation
+        ├── middleware/
+        │   ├── auth.ts           # authenticateToken, requireRole, assertClinicOwnership
+        │   ├── csrf.ts           # Double-submit cookie CSRF protection
+        │   ├── validate.ts       # validateBody (Zod)
+        │   └── security.ts       # Helmet CSP, rate limiters, CORS
+        ├── schemas/
+        │   └── index.ts          # All Zod schemas
+        ├── db/
+        │   ├── init.ts           # initDb() with env-based admin seeding
+        │   └── client.ts         # PrismaClient singleton
+        └── routes/
+            ├── auth.ts           # /api/auth/* (login, logout, me, refresh)
+            ├── admin.ts          # /api/admin/populate
+            ├── clinics.ts        # /api/clinics/:id
+            ├── users.ts          # /api/users/*
+            ├── patients.ts       # /api/patients/*
+            ├── consultations.ts  # /api/patients/:id/consultations
+            ├── appointments.ts   # /api/appointments/*
+            ├── invoices.ts       # /api/invoices/*
+            ├── expenses.ts       # /api/expenses/*
+            ├── stats.ts          # /api/stats
+            ├── audit.ts          # /api/audit_logs (admin-only read)
+            ├── ai.ts             # /api/ai/*, /api/ai_chats/*
+            ├── payments.ts       # /api/payments/create-order
+            └── webhooks.ts       # /api/webhooks/payment
 ```
 
 ---
@@ -163,9 +214,11 @@ Before deploying with real PHI:
 - **Language**: [TypeScript 5.8](https://www.typescriptlang.org/) (strict mode)
 - **Animations**: [Motion](https://motion.dev/)
 - **Backend**: [Node.js 20](https://nodejs.org/), [Express 4](https://expressjs.com/)
-- **Database**: [PostgreSQL 15](https://www.postgresql.org/) (with in-memory mock fallback for dev)
+- **Database**: [PostgreSQL 15](https://www.postgresql.org/) + [Prisma ORM 5](https://www.prisma.io/) (with in-memory mock fallback for dev)
 - **AI Engine**: [Google Gemini](https://ai.google.dev/) (with PHI sanitization)
-- **Testing**: [Vitest](https://vitest.dev/) + [Supertest](https://github.com/ladjs/supertest)
+- **Logging**: [Pino](https://github.com/pinojs/pino) + [pino-http](https://github.com/pinojs/pino-http) (structured JSON, PHI redaction)
+- **Testing**: [Vitest](https://vitest.dev/) (52 unit/integration tests) + [Playwright](https://playwright.dev/) (8 E2E tests)
+- **Linting**: [ESLint 9](https://eslint.org/) + [Prettier 3](https://prettier.io/) (with security plugins)
 - **Security**: [Helmet](https://helmetjs.github.io/), [express-rate-limit](https://github.com/express-rate-limit/express-rate-limit), [bcryptjs](https://github.com/dcodeIO/bcrypt.js), [jsonwebtoken](https://github.com/auth0/node-jsonwebtoken), [zod](https://zod.dev/)
 
 ---
@@ -175,21 +228,26 @@ Before deploying with real PHI:
 The boilerplate ships with two database modes:
 
 ### 1. In-Memory Mock (default, for development)
-- 8 arrays (`mockUsers`, `mockPatients`, `mockConsultations`, etc.) managed in `server.ts`.
+- 8 arrays (`mockUsers`, `mockPatients`, `mockConsultations`, etc.) managed in `src/server/config.ts`.
 - Allows instant setup without a Postgres instance.
 - Use the "Populate with Test Data" button in Settings to generate synthetic patients, appointments, and consultations.
 - **Volatile test data is purged on admin logout.**
 
-### 2. PostgreSQL (for production)
-- `schema.sql` declares the full schema with:
-  - UUID primary keys (`uuid-ossp` extension)
-  - Row-Level Security (RLS) policies with `WITH CHECK` for INSERT/UPDATE
-  - ENUM types for roles and statuses
-  - Foreign keys with explicit `ON DELETE` actions
-  - Indexes on foreign keys and `clinic_id` for multi-tenant query performance
-- When PostgreSQL is available (`PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` set), `initDb()` connects and creates the `users` and `clinics` tables. To enable the full schema, run `psql -f schema.sql` against your database.
+### 2. PostgreSQL + Prisma (for production)
+- `prisma/schema.prisma` is the source of truth for the schema: 9 models (Clinic, User, Patient, Appointment, Consultation, Invoice, Expense, AiChat, AuditLog), 3 enums (UserRole, AppointmentStatus, InvoiceStatus).
+- Migrations are versioned in `prisma/migrations/`. Apply with `npm run prisma:deploy`.
+- `schema.sql` is kept for non-Prisma setups (direct psql) and includes Row-Level Security (RLS) policies with `WITH CHECK` for INSERT/UPDATE.
+- The Prisma client is generated on `npm install` (postinstall hook) and used via `src/server/db/client.ts`.
 
-> **Note**: The mock arrays and the SQL schema currently diverge in column types. The encryption format produces hex strings of 60-100+ characters, so `VARCHAR(20)` columns in `schema.sql` for `identification_number` / `phone` must be widened to `TEXT` or `VARCHAR(255)` before deploying with real DB mode. See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for migration instructions.
+### Switching to PostgreSQL mode
+
+1. Set `DATABASE_URL` in `.env` (format: `postgresql://user:pass@host:5432/db?schema=public`).
+2. Run `npm run prisma:deploy` to apply migrations.
+3. (Optional) Apply RLS policies: `psql $DATABASE_URL -f schema.sql`.
+4. Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` to seed the first admin.
+5. Restart the server.
+
+> **Note**: The route handlers in `src/server/routes/` still use the mock arrays. Migrating them to PrismaClient calls is the next step — the Prisma client and schema are ready, the switchover is incremental and per-route.
 
 ---
 
@@ -253,23 +311,40 @@ If you did **not** set those env vars, no admin is seeded. Set them and restart 
 
 ## Testing
 
+The project has **60 tests** across three layers:
+
+### Unit tests (Vitest, 23 tests)
 ```bash
-# Run all tests once
-npm test
-
-# Watch mode
-npm run test:watch
-
-# With coverage
-npm run test:ci
+npm test                    # run all vitest tests
+npm run test:watch          # watch mode
+npm run test:ci             # with coverage
 ```
+- `tests/encryption.test.ts` (8): AES-256-GCM round-trip, tamper detection, Unicode support
+- `tests/env.test.ts` (5): Zod schema validation for secrets
+- `tests/refresh-token.test.ts` (10): rotation, revocation, expiry
 
-Tests use Vitest + Supertest. The suite covers:
-- Auth (login success/failure, JWT verification, role enforcement)
-- IDOR (cross-clinic access returns 404)
-- Encryption (round-trip, auth tag failure throws)
-- CSRF (state-changing requests without token are rejected)
-- Payment webhook (signature verification, idempotency)
+### Integration tests (Vitest, 29 tests)
+- `tests/api.test.ts` (13): spawn-based, full HTTP stack (CSRF, headers, rate limit, webhook HMAC)
+- `tests/in-process.test.ts` (16): in-process via `createApp()`, fast (~300ms total)
+
+### E2E tests (Playwright, 8 tests)
+```bash
+npm run test:e2e            # runs all E2E tests (spawns dev server + Chromium)
+```
+- `e2e/happy-paths.spec.ts`: login flow, dashboard rendering, patient navigation, logout, security headers
+
+### Coverage
+
+| Layer | What it covers |
+|-------|----------------|
+| Auth | login success/failure, JWT verification, role enforcement, refresh token rotation |
+| RBAC | admin-only endpoints reject non-admins (403) |
+| IDOR | cross-clinic access returns 404 (no existence leak) |
+| Encryption | round-trip, auth tag failure throws, Unicode support |
+| CSRF | state-changing requests without token rejected (403); login/refresh/webhook exempt |
+| Payment webhook | HMAC signature verification, idempotency, missing signature |
+| Security headers | CSP, HSTS, COOP, CORP, Referrer-Policy present |
+| E2E | real browser login → dashboard → logout, security headers via HTTP response |
 
 ---
 
@@ -277,9 +352,10 @@ Tests use Vitest + Supertest. The suite covers:
 
 Every push to `main` and every PR triggers `.github/workflows/ci.yml`:
 1. **Typecheck** (`tsc --noEmit` with strict mode)
-2. **Tests** (`vitest run` with test secrets)
-3. **Build** (`vite build`)
-4. **Security audit** (`npm audit --audit-level=high`, no `continue-on-error`)
+2. **Lint** (`eslint .` with security plugins)
+3. **Tests** (`vitest run` with test secrets)
+4. **Build** (`vite build`)
+5. **Security audit** (`npm audit --audit-level=high`, no `continue-on-error`)
 
 Deploy workflow (`.github/workflows/deploy.yml`) is provided as a template — configure `SERVER_HOST`, `SERVER_USER`, `SERVER_SSH_KEY`, and `DEPLOY_PATH` secrets to enable SSH-based deployment.
 

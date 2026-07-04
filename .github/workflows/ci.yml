@@ -11,6 +11,21 @@ jobs:
     name: Lint, Typecheck, Test, Build
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: medical_saas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -24,17 +39,31 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      - name: Format Check (Prettier)
+        run: npm run format:check
+
       - name: Typecheck (tsc --noEmit)
         run: npm run typecheck
 
-      - name: Run Tests
+      - name: Run Unit + Integration Tests
         run: npm test
         env:
           NODE_ENV: test
           JWT_SECRET: ${{ secrets.JWT_SECRET_TEST || 'ci_test_jwt_secret_minimum_32_characters_long_for_testing_only' }}
-          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY_TEST || 'a'.repeat(64) }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY_TEST || 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }}
           PAYMENT_WEBHOOK_SECRET: ${{ secrets.PAYMENT_WEBHOOK_SECRET_TEST || 'ci_test_webhook_secret_min_16_chars' }}
           FRONTEND_URL: http://localhost:3000
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/medical_saas_test?schema=public
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: medical_saas_test
 
       - name: Production Build
         run: npm run build
