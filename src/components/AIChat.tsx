@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Ico } from "./Ico";
 import { accent, text1, text2, text3, glass, danger } from "../theme";
-import { createAIChat, toolsImplementation } from "../lib/ai-service";
 import { api } from "../lib/api";
 import { useAuth } from "../App";
 
@@ -17,20 +16,19 @@ interface AIChatProps {
 export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clinicId, selectedPatientId }) => {
   const { user } = useAuth();
   const [messages, setMessages] = useState<{ role: "bot" | "user"; text: string }[]>([]);
-  const [input, setInput] = useState(localStorage.getItem("ai_chat_draft") || "");
+  const [input, setInput] = useState(sessionStorage.getItem("ai_chat_draft") || "");
   const [isThinking, setIsThinking] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [chats, setChats] = useState<any[]>([]);
-  const [currentChatId, setCurrentChatId] = useState<string | null>(localStorage.getItem("lastAIChatId"));
+  const [currentChatId, setCurrentChatId] = useState<string | null>(sessionStorage.getItem("lastAIChatId"));
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const chatRef = useRef<any>(null);
 
-  // Save draft to localStorage
+  // Save draft to sessionStorage (cleared when tab closes, NOT persistent across sessions)
   useEffect(() => {
-    localStorage.setItem("ai_chat_draft", input);
+    sessionStorage.setItem("ai_chat_draft", input);
   }, [input]);
 
   const fetchChats = async () => {
@@ -56,22 +54,6 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
     fetchChats();
   }, [clinicId, currentChatId, user]);
 
-  // Initialize/Update Gemini session
-  useEffect(() => {
-    if (!clinicId) return;
-
-    const systemInstruction = `Clinic Context:
-    - Clinic ID: ${clinicId}
-    - User Role: ${userRole}
-    - Selected Patient: ${selectedPatientId || "None"}
-    
-    Instructions:
-    1. If the user asks for "this patient", use the ID: ${selectedPatientId || "No patient selected"}.
-    2. If no patient is selected, ask the user to search for one or use 'search_patients'.`;
-
-    chatRef.current = createAIChat(systemInstruction, messages);
-  }, [clinicId, userRole, currentChatId]); // Re-init when chat changes
-
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -81,7 +63,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
   const handleSelectChat = (id: string, msgs: any[]) => {
     setCurrentChatId(id);
     setMessages(msgs);
-    localStorage.setItem("lastAIChatId", id);
+    sessionStorage.setItem("lastAIChatId", id);
     setShowHistory(false);
   };
 
@@ -111,7 +93,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
       if (currentChatId === id) {
         setCurrentChatId(null);
         setMessages([]);
-        localStorage.removeItem("lastAIChatId");
+        sessionStorage.removeItem("lastAIChatId");
       }
       fetchChats();
     } catch (err) {
@@ -137,37 +119,24 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isThinking || !chatRef.current || !user || !clinicId) return;
+    if (!input.trim() || isThinking || !user || !clinicId) return;
 
     const userMsg = input.trim();
     const newMessages = [...messages, { role: "user" as const, text: userMsg }];
     setMessages(newMessages);
     setInput("");
-    localStorage.removeItem("ai_chat_draft");
+    sessionStorage.removeItem("ai_chat_draft");
     setIsThinking(true);
 
     try {
-      chatRef.current = createAIChat("", newMessages.slice(0, -1));
-      let response = await chatRef.current.sendMessage(userMsg);
-
-      while (response.functionCalls) {
-        const results: any[] = [];
-        for (const call of response.functionCalls) {
-          const fnName = call.name as keyof typeof toolsImplementation;
-          if (toolsImplementation[fnName]) {
-            const result = await toolsImplementation[fnName](call.args);
-            results.push({
-              functionResponse: {
-                name: fnName,
-                response: result,
-              },
-            });
-          }
-        }
-        response = await chatRef.current.sendMessage(results);
-      }
-
-      const botText = response.text || "I couldn't process the response.";
+      // Call the server-side AI endpoint. The server sanitizes PHI before
+      // forwarding to Gemini, and the GEMINI_API_KEY never reaches the browser.
+      const data = await api.ai.chat({
+        message: userMsg,
+        history: newMessages.slice(0, -1),
+        selectedPatientId: selectedPatientId || undefined,
+      });
+      const botText = data.reply;
       const finalMessages = [...newMessages, { role: "bot" as const, text: botText }];
       setMessages(finalMessages);
 
@@ -184,7 +153,7 @@ export const AIChat: React.FC<AIChatProps> = ({ isOpen, onToggle, userRole, clin
           messages: finalMessages,
         });
         setCurrentChatId(newChat.id);
-        localStorage.setItem("lastAIChatId", newChat.id);
+        sessionStorage.setItem("lastAIChatId", newChat.id);
       }
       fetchChats();
     } catch (error: any) {

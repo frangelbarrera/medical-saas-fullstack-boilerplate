@@ -116,6 +116,8 @@ export const api = {
     createOrder: (data: any) => request("/payments/create-order", { method: "POST", body: JSON.stringify(data) }),
   },
   ai: {
+    chat: (data: { message: string; history: { role: "user" | "bot"; text: string }[]; selectedPatientId?: string }) =>
+      request<{ reply: string }>("/ai/chat", { method: "POST", body: JSON.stringify(data) }),
     processConsultation: (_audioBlob: Blob) => {
       return request("/ai/process-consultation", { method: "POST" });
     },

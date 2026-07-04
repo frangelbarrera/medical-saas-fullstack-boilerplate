@@ -171,8 +171,9 @@ export default function App() {
     }
     // Clear any client-side PHI cached during the session
     try {
-      localStorage.removeItem("ai_chat_draft");
       sessionStorage.clear();
+      localStorage.removeItem("ai_chat_draft");
+      localStorage.removeItem("lastAIChatId");
     } catch (e) {
       console.error("Failed to clear storage on logout", e);
     }
