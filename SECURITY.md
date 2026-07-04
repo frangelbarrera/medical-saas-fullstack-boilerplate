@@ -4,8 +4,183 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.1.x   | :white_check_mark: |
-| < 1.1   | :x:                |
+| 1.2.x   | :white_check_mark: |
+| < 1.2   | :x:                |
+
+## Bug Bounty Audit (v1.2)
+
+A comprehensive bug bounty audit was performed on v1.2. The following bugs
+were found and fixed. This section documents them for transparency and to
+help downstream users understand what was hardened.
+
+### CRITICAL bugs fixed in v1.2
+
+1. **Payment fraud (underpayment + cross-clinic)**: `createOrder` accepted
+   `amount` from the request body without verifying it matched the invoice.
+   An attacker could pay $0.01 for a $10,000 invoice. The invoice `amount`
+   is now read from the DB record (looked up by `invoiceId` + `clinicId`
+   from JWT). The webhook now refuses to mark already-Paid or Cancelled
+   invoices. CWE-840, CWE-639.
+
+2. **AI service leaked to client bundle**: `src/lib/ai-service.ts` was
+   imported by the frontend, shipping the Gemini SDK, system prompt, and
+   sanitization regex to the browser. Moved to `src/server/services/` and
+   exposed via `POST /api/ai/chat` endpoint. PHI is sanitized server-side
+   before reaching Gemini. CWE-311, CWE-200.
+
+3. **NODE_ENV default to 'development' (fail-open)**: if `NODE_ENV` was
+   missing in production, the app mounted Vite dev middleware (CVE risk)
+   and used a permissive CSP. `NODE_ENV` is now required (no default).
+   CWE-1188.
+
+4. **Logger leaked cookies/tokens**: pino-http logs all request headers
+   by default, including `Cookie: __Host-token=...`. Added
+   `req.headers.cookie`, `req.headers.authorization`, and CSRF token
+   headers to PHI_REDACT_PATHS. CWE-532.
+
+5. **DB login didn't check is_active**: deactivated users could still
+   log in and get 8h access tokens. Login now loads `is_active` from the
+   DB row and rejects deactivated users with a generic error. CWE-269.
+
+6. **__Host- cookie prefix bypassed by fallback**: `authenticateToken`
+   fell back to the non-prefixed `token` cookie, allowing session fixation
+   via subdomain cookie injection. Fallback removed in production.
+   CWE-384, CWE-1004.
+
+### HIGH bugs fixed in v1.2
+
+7. **Refresh token reuse detection**: presenting a revoked refresh token
+   now revokes the entire family (all tokens for that user), per OAuth 2.0
+   BCP. Prevents silent persistent access via stolen tokens. CWE-613.
+
+8. **Webhook marked invoices Paid without verifying amount/status**: the
+   webhook now refuses to mark already-Paid or Cancelled invoices. CWE-840.
+
+9. **Dockerfile used `npx tsx` in runtime**: tsx is a devDependency, so
+   `npx` downloaded it from npm at container startup (supply chain risk).
+   Now installs tsx explicitly with a pinned version. CWE-494.
+
+10. **SECRETARY could read clinical consultations**: GET
+    `/api/patients/:id/consultations` had no role check. Now requires
+    ADMIN or DOCTOR (HIPAA Minimum Necessary). CWE-285.
+
+11. **DELETE /api/patients had no RBAC**: any authenticated user could
+    permanently destroy PHI. Now requires ADMIN. CWE-285.
+
+12. **PUT /api/clinics had no RBAC**: secretary/doctor could change clinic
+    contact details (email redirect). Now requires ADMIN. CWE-285.
+
+13. **Cross-clinic reference forgery in appointments/invoices**: `patientId`
+    and `doctorId` from the body were stored without verifying they belonged
+    to the caller's clinic. Now verified before storing. CWE-639.
+
+14. **Consultation doctor spoofing**: a DOCTOR could attribute a consultation
+    to a colleague. If the caller is DOCTOR, `doctorId` is forced to their
+    own ID. ADMIN must specify a verified doctor in the clinic. CWE-639.
+
+15. **Expenses `registeredBy` from body**: accountability forgery — a user
+    could attribute a fraudulent expense to another user. `registeredBy`
+    is now taken from `req.user.id` (JWT). CWE-345.
+
+16. **Invoice status not validated**: any user could create an invoice with
+    `status: "Paid"` directly. Status is now forced to "Pending" on creation.
+    Only the payment webhook can mark an invoice as Paid. CWE-20.
+
+17. **Login timing oracle**: user-not-found (~5ms) was distinguishable from
+    wrong-password (~100ms bcrypt). Now always runs bcrypt against a dummy
+    hash when user not found. CWE-208.
+
+18. **Login role enumeration**: the `role` field returned a distinct error
+    ("User exists but does not have the X role") that confirmed the password
+    was valid. Now returns generic "Invalid username or password". CWE-204.
+
+19. **AI chat had no audit log**: AI conversations can contain PHI but were
+    not audited. All AI chat CRUD operations now call `appendAuditLog`.
+    HIPAA §164.312(b).
+
+20. **Appointments could be scheduled in the past**: allowed backdating for
+    insurance fraud. Now rejects `dateTime < now()` (60s grace window).
+    CWE-840.
+
+21. **No global error handler**: stack traces leaked to clients in
+    non-production. Added catch-all error middleware that returns generic
+    errors in production and logs full details server-side. CWE-209.
+
+22. **Rate limiter ineffective behind proxy**: `app.set('trust proxy', 1)`
+    was missing, so all requests shared the proxy's IP bucket. Now trusts
+    the first proxy. CWE-770.
+
+23. **Swagger UI exposed in production**: `/api-docs` was public, allowing
+    attackers to enumerate the API surface. Now only mounted in
+    non-production. CWE-200.
+
+24. **PGUSER/PGPASSWORD had dangerous defaults**: silent connections with
+    `postgres:postgres` if env vars missing. Now required (no defaults).
+    CWE-1188.
+
+25. **DB refresh always 401 (is_active not loaded)**: the refresh handler
+    didn't load `is_active` from the DB row, so `!undefined === true`
+    rejected all DB users. Fixed. CWE-696.
+
+### MEDIUM bugs fixed in v1.2
+
+26. **Clickjacking header contradiction**: `X-Frame-Options: SAMEORIGIN`
+    contradicted `CSP frame-ancestors: 'none'`. Aligned to `frameguard:
+    { action: 'deny' }`. CWE-1021.
+
+27. **PHI persisted in localStorage on tab close**: AI chat draft moved
+    from `localStorage` to `sessionStorage` (cleared on tab close). CWE-312.
+
+28. **paymentUrl opened without protocol validation**: `window.open` now
+    validates `https:` protocol (allows `http: localhost` in dev). Prevents
+    `javascript:` and `data:` URI injection. CWE-601.
+
+29. **Attachment URL rendered as href without validation**: `<a href>`
+    now validates `^https?://` before rendering. Prevents `javascript:`
+    URI execution. CWE-79.
+
+30. **Populate had no cap**: `/api/admin/populate` now caps at 1000 patients
+    per clinic to prevent OOM. CWE-770.
+
+31. **Audit log truncated to 50 entries**: allowed attackers to push
+    malicious entries out of the visible window. Now paginated with
+    `?page=N&limit=M`. CWE-778.
+
+32. **Audit hash chain had no verification endpoint**: added
+    `GET /api/audit_logs/verify` to walk the chain and detect tampering.
+    CWE-345.
+
+33. **userUpdate role not validated against enum**: an admin could set
+    `role: "SUPERADMIN"`. Now validated against `["ADMIN","DOCTOR","SECRETARY"]`.
+    CWE-20.
+
+34. **managedDoctorIds not verified**: could assign a secretary to manage
+    doctors from another clinic. Now verified. CWE-639.
+
+### Known limitations (documented, not fixed in v1.2)
+
+- **RLS not applied via Prisma migrate**: `prisma migrate deploy` does not
+  enable Row-Level Security. RLS policies are in `schema.sql` and must be
+  applied manually with `psql -f schema.sql` after the initial migration.
+  Defense-in-depth: app-layer isolation (clinicId from JWT in every query)
+  is the primary control. CWE-668.
+
+- **DB connects as superuser in default docker-compose**: the `postgres`
+  user bypasses RLS. Production deployments should create a separate
+  `app_user` role with limited privileges. CWE-250.
+
+- **Rate limit store is in-memory**: ineffective in multi-instance
+  deployments. Use `rate-limit-redis` for horizontal scaling. CWE-770.
+
+- **JWT contains PII (`name`)**: the JWT payload includes the user's full
+  name, which is decodable by anyone with the token. Consider a minimal
+  payload (`sub`, `clinic`, `role`) for higher security. CWE-311.
+
+- **Refresh token race condition in DB mode**: two concurrent refresh
+  requests with the same token can both succeed before rotation completes.
+  Mitigated by reuse detection (presenting the old token revokes the
+  family), but a true atomic compare-and-set requires DB transaction
+  support (future work). CWE-362.
 
 ## Reporting a Vulnerability
 

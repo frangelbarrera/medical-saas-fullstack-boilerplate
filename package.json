@@ -1,7 +1,7 @@
 {
   "name": "full-stack-medical-saas-boilerplate",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Full-Stack Medical SaaS Boilerplate with AI Scribe, EHR, audit trail and HIPAA-aware design.",
   "type": "module",
   "scripts": {
