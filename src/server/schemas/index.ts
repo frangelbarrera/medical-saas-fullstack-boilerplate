@@ -106,9 +106,11 @@ export const schemas = {
     messages: z.array(z.any()).optional(),
   }),
   createOrder: z.object({
-    invoiceId: z.string(),
-    amount: z.number().positive(),
-    patientName: z.string(),
+    invoiceId: z.string().min(1).max(100),
+    // amount is ignored server-side (taken from the invoice record), but kept
+    // optional for backwards compatibility with existing API clients.
+    amount: z.number().finite().positive().optional(),
+    patientName: z.string().min(1).max(255),
     clinicId: z.string().optional(), // ignored, taken from JWT
   }),
 } as const;

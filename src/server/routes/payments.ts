@@ -3,12 +3,17 @@
  *
  * Webhook handler lives in webhooks.ts. This file only handles the
  * "create order" flow that calls the external payment gateway.
+ *
+ * Security: the order amount is taken from the invoice record (looked up by
+ * invoiceId + clinicId from JWT), NEVER from the request body. This prevents
+ * underpayment attacks (paying $0.01 for a $10,000 invoice) and cross-clinic
+ * invoice fraud.
  */
 import { Router } from "express";
 import { AuthenticatedRequest, authenticateToken } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { schemas } from "../schemas/index.js";
-import { env, mockAuditLogs, mockInvoices } from "../config.js";
+import { env, mockInvoices } from "../config.js";
 import { generateRandomId } from "../utils/crypto.js";
 import { appendAuditLog } from "../utils/audit.js";
 import { logger } from "../utils/logger.js";
@@ -23,8 +28,28 @@ paymentsRouter.post(
   authenticateToken,
   validateBody(schemas.createOrder),
   async (req: AuthenticatedRequest, res: any) => {
-    const { invoiceId, amount, patientName } = req.body;
+    const { invoiceId, patientName } = req.body;
     const clinicId = req.user!.clinicId;
+
+    // SECURITY: look up the invoice and verify ownership + status.
+    // The amount is taken from the invoice record, NEVER from the request body.
+    const invoice = mockInvoices.find((i) => i.id === invoiceId && i.clinic_id === clinicId);
+    if (!invoice) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
+    if (invoice.status === "Paid") {
+      return res.status(409).json({ error: "Invoice is already paid" });
+    }
+    if (invoice.status === "Cancelled") {
+      return res.status(409).json({ error: "Invoice is cancelled" });
+    }
+
+    // Use the invoice amount (server-side source of truth), ignore body amount.
+    const amount = invoice.amount;
+    const amountInCents = Math.round(amount * 100);
+    if (amountInCents <= 0) {
+      return res.status(400).json({ error: "Invoice amount must be greater than zero" });
+    }
 
     // TEST MODE if no token configured
     if (!PAYMENT_GATEWAY_TOKEN) {
@@ -46,7 +71,6 @@ paymentsRouter.post(
     }
 
     try {
-      const amountInCents = Math.round(amount * 100);
       // Host Header Injection fix: use FRONTEND_URL env var, not req.get('host')
       const baseUrl = env.FRONTEND_URL;
 

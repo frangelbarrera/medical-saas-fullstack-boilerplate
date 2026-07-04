@@ -3,6 +3,8 @@
  *
  * Verifies HMAC-SHA256 signature over raw body using PAYMENT_WEBHOOK_SECRET.
  * Implements idempotency (replayed webhooks are detected and skipped).
+ * Validates that the invoice exists, belongs to a real clinic, and is not
+ * already paid before marking it as Paid.
  */
 import { Router, Request, Response } from "express";
 import crypto from "crypto";
@@ -51,6 +53,20 @@ webhooksRouter.post("/api/webhooks/payment", async (req: Request, res: Response)
     if (idx === -1) {
       return res.status(404).json({ error: "Invoice not found" });
     }
+
+    // SECURITY: do not mark an already-paid invoice again (prevents replay
+    // attacks with a different transactionId for the same invoice).
+    if (mockInvoices[idx].status === "Paid") {
+      logger.warn({ msg: "Webhook for already-paid invoice", invoiceId: clientTransactionId, transactionId });
+      return res.status(200).json({ message: "Invoice already paid" });
+    }
+
+    // SECURITY: do not mark cancelled invoices as paid.
+    if (mockInvoices[idx].status === "Cancelled") {
+      logger.warn({ msg: "Webhook for cancelled invoice", invoiceId: clientTransactionId });
+      return res.status(409).json({ error: "Invoice is cancelled" });
+    }
+
     mockInvoices[idx].status = "Paid";
     const invoice = mockInvoices[idx];
 
