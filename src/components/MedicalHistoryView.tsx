@@ -1278,7 +1278,18 @@ export function MedicalHistoryView({ patientId, onBack, onNewConsultation }: Pro
                           {file.date} • {file.size || "---"}
                         </p>
                       </div>
-                      <a href={file.url} target="_blank" rel="noreferrer" style={{ color: accent }}>
+                      <a
+                        href={/^https?:\/\//.test(file.url) ? file.url : "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: accent }}
+                        onClick={(e) => {
+                          if (!/^https?:\/\//.test(file.url)) {
+                            e.preventDefault();
+                            alert("Invalid attachment URL. Only http(s) URLs are allowed.");
+                          }
+                        }}
+                      >
                         <Ico name="ExternalLink" size={14} />
                       </a>
                       {isEditing && (

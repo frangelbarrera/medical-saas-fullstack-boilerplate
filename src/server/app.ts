@@ -71,8 +71,11 @@ export async function createApp(): Promise<express.Application> {
     }),
   );
 
-  // Swagger
-  setupSwagger(app);
+  // Swagger UI: only exposed in development. In production, the API surface
+  // should not be enumerable by unauthenticated visitors.
+  if (env.NODE_ENV !== "production") {
+    setupSwagger(app);
+  }
 
   // Routes
   app.use(authRouter);

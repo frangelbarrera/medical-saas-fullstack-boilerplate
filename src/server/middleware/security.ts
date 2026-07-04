@@ -56,6 +56,10 @@ export const helmetMiddleware = helmet({
   crossOriginOpenerPolicy: { policy: "same-origin" },
   crossOriginResourcePolicy: { policy: "same-origin" },
   referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  // Align X-Frame-Options with CSP frame-ancestors: 'none'. Without this,
+  // Helmet's default X-Frame-Options: SAMEORIGIN contradicts the CSP and
+  // allows framing from the same origin (clickjacking via stored XSS).
+  frameguard: { action: "deny" },
   hsts: {
     maxAge: 31536000,
     includeSubDomains: true,

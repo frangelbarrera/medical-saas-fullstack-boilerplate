@@ -110,7 +110,23 @@ export function FinanceView() {
         clinicId,
       });
       if (res.paymentUrl) {
-        window.open(res.paymentUrl, "_blank");
+        // SECURITY: only open HTTPS URLs. Prevents javascript: and data: URI
+        // injection if the payment gateway is compromised or returns a malicious URL.
+        try {
+          const url = new URL(res.paymentUrl);
+          if (url.protocol === "https:") {
+            window.open(res.paymentUrl, "_blank", "noopener,noreferrer");
+          } else if (url.protocol === "http:" && url.hostname === "localhost") {
+            // Allow localhost in dev for testing
+            window.open(res.paymentUrl, "_blank", "noopener,noreferrer");
+          } else {
+            toast.error("Invalid payment URL protocol. Only HTTPS is allowed.");
+            console.error("Blocked non-HTTPS payment URL:", url.protocol);
+          }
+        } catch {
+          toast.error("Invalid payment URL received.");
+          console.error("Invalid payment URL:", res.paymentUrl);
+        }
       } else {
         toast.error("No payment URL received. Check payment configuration.");
       }
