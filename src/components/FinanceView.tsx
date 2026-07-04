@@ -447,24 +447,7 @@ export function FinanceView() {
                 createdAt: new Date().toISOString()
               });
               
-              // Audit Log
-              await api.auditLogs.create({
-                userId: user?.id,
-                userName: user?.name || "User",
-                action: "Invoice Created",
-                details: {
-                  invoiceId: res.id,
-                  patientName: data.patientName,
-                  amount: data.amount,
-                  concept: data.concept,
-                  paymentMethod: data.paymentMethod,
-                  emissionDate: data.date
-                },
-                clinicId,
-                timestamp: new Date().toISOString(),
-                type: "FINANCE"
-              });
-
+              // Audit log is now created server-side by the backend on invoice creation.
               setShowInvoiceModal(false);
             }}
             type="invoice"
@@ -484,23 +467,7 @@ export function FinanceView() {
                 createdAt: new Date().toISOString()
               });
 
-              // Audit Log
-              await api.auditLogs.create({
-                userId: user?.id,
-                userName: user?.name || "User",
-                action: "Expense Registered",
-                details: {
-                  expenseId: res.id,
-                  concept: data.concept,
-                  category: data.category,
-                  amount: data.amount,
-                  emissionDate: data.date
-                },
-                clinicId,
-                timestamp: new Date().toISOString(),
-                type: "FINANCE"
-              });
-
+              // Audit log is now created server-side by the backend on expense creation.
               setShowExpenseModal(false);
             }}
             type="expense"

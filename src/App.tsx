@@ -1,7 +1,7 @@
 import React, { useState, useEffect, createContext, useContext, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Toaster, toast } from 'sonner';
-import { api } from "./lib/api";
+import { api, setCsrfToken } from "./lib/api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Ico } from "./components/Ico";
 import { DashboardView } from "./components/DashboardView";
@@ -186,11 +186,12 @@ export default function App() {
     setIsSubmitting(true);
     setLoginError(null);
     try {
-      const { user: u } = await api.auth.login({ 
+      const { user: u, csrfToken } = await api.auth.login({ 
         username: legacyUsername, 
         password: legacyPassword,
         role: legacyRole
       });
+      setCsrfToken(csrfToken);
       setUser(u);
       setClinicId(u.clinicId);
       setRole(u.role);
@@ -212,6 +213,14 @@ export default function App() {
     } catch (e) {
       console.error("Logout failed", e);
     }
+    // Clear any client-side PHI cached during the session
+    try {
+      localStorage.removeItem("ai_chat_draft");
+      sessionStorage.clear();
+    } catch (e) {
+      console.error("Failed to clear storage on logout", e);
+    }
+    setCsrfToken(null);
     setUser(null);
     setClinicId(null);
     setRole(null);

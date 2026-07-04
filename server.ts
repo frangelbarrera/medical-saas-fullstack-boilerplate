@@ -188,7 +188,10 @@ initDb();
 
 // --- Auth Middleware ---
 const authenticateToken = (req: any, res: any, next: any) => {
-  const token = req.cookies.token || (req.headers['authorization'] && req.headers['authorization'].split(' ')[1]);
+  // Read session cookie (prefixed in production)
+  const cookieName = env.NODE_ENV === 'production' ? '__Host-token' : 'token';
+  const token = req.cookies?.[cookieName] || req.cookies?.token
+    || (req.headers['authorization'] && req.headers['authorization'].split(' ')[1]);
 
   if (!token) return res.sendStatus(401);
 
@@ -223,22 +226,31 @@ const app = express();
 
 // Set up CORS
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  origin: env.FRONTEND_URL,
   credentials: true,
 }));
 
 // Set up Cookie Parser
 app.use(cookieParser());
 
-// CSRF Protection Middleware
+// CSRF Protection: Double-Submit Cookie pattern.
+// On login, the server sets a non-httpOnly cookie 'csrf_token' with a random
+// value. The frontend must read it and send the same value back in the
+// 'x-csrf-token' header for state-changing requests. An attacker on a
+// different origin cannot read the cookie (SameSite + CORS) and therefore
+// cannot forge the header. This is the standard pattern when cookies use
+// SameSite=None (required for cross-origin deployments).
 const csrfProtection = (req: any, res: any, next: any) => {
-  // Safe methods skip CSRF check
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     return next();
   }
-  // Require custom header for state-changing methods
-  const csrfToken = req.headers['x-csrf-token'];
-  if (!csrfToken || csrfToken !== 'fetch') {
+  // Webhook has its own HMAC verification, skip CSRF there
+  if (req.path === '/api/webhooks/payment') {
+    return next();
+  }
+  const cookieToken = req.cookies?.csrf_token;
+  const headerToken = req.headers['x-csrf-token'];
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
     return res.status(403).json({ error: "CSRF token missing or invalid." });
   }
   next();
@@ -246,9 +258,48 @@ const csrfProtection = (req: any, res: any, next: any) => {
 
 app.use("/api/", csrfProtection);
 
-// Security Headers (Disable CSP for Vite HMR in development)
+// Helper to generate a new CSRF token (called on login)
+const generateCsrfToken = () => crypto.randomBytes(32).toString('hex');
+
+// Security Headers with explicit CSP.
+// In development, Vite needs 'unsafe-inline' for styles and connects to itself.
+// In production, the policy is strict.
+const cspDirectives = env.NODE_ENV === 'production'
+  ? {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"], // Tailwind requires inline styles
+      imgSrc: ["'self'", "data:", "https:"],
+      fontSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      frameAncestors: ["'none'"],
+      formAction: ["'self'"],
+      baseUri: ["'self'"],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: [],
+    }
+  : {
+      // Dev: more permissive to allow Vite HMR over websockets
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      fontSrc: ["'self'", "data:"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      frameAncestors: ["'none'"],
+    };
+
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: { directives: cspDirectives },
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: { policy: 'same-origin' },
+  crossOriginResourcePolicy: { policy: 'same-origin' },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
 }));
 
 // Global Rate Limiting
@@ -425,7 +476,14 @@ async function startServer() {
     res.clearCookie("token", {
       httpOnly: true,
       secure: true,
-      sameSite: "none",
+      sameSite: "lax",
+      path: "/",
+    });
+    res.clearCookie("csrf_token", {
+      httpOnly: false,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
     });
     res.json({ success: true });
   });
@@ -504,12 +562,28 @@ async function startServer() {
         managed_doctor_ids: user.managed_doctor_ids
       }, JWT_SECRET, { expiresIn: '8h' });
 
-      // Set cookie
-      res.cookie("token", token, {
+      // Set session cookie (httpOnly: JS cannot read it; SameSite=lax blocks CSRF
+      // for top-level navigations; secure: only over HTTPS in prod).
+      // In production we use __Host- prefix which forces secure, path=/, no domain.
+      const isProd = env.NODE_ENV === 'production';
+      const cookieName = isProd ? '__Host-token' : 'token';
+      const csrfToken = generateCsrfToken();
+      res.cookie(cookieName, token, {
         httpOnly: true,
         secure: true,
-        sameSite: "none",
-        maxAge: 8 * 60 * 60 * 1000 // 8 hours
+        sameSite: "lax",
+        path: "/",
+        maxAge: 8 * 60 * 60 * 1000, // 8 hours
+        ...(isProd ? {} : {}), // __Host- requires no domain
+      });
+      // CSRF double-submit cookie: readable by JS so it can be sent back as header.
+      const csrfCookieName = isProd ? '__Host-csrf_token' : 'csrf_token';
+      res.cookie(csrfCookieName, csrfToken, {
+        httpOnly: false,
+        secure: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 8 * 60 * 60 * 1000,
       });
 
       res.json({ 
@@ -520,7 +594,8 @@ async function startServer() {
           clinicId: user.clinic_id, 
           name: user.name,
           managed_doctor_ids: user.managed_doctor_ids
-        } 
+        },
+        csrfToken // also returned in body so frontend can store in memory
       });
     } catch (err: any) {
       if (err instanceof z.ZodError) {
