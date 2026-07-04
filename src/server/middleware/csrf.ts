@@ -22,6 +22,8 @@ export const csrfProtection = (req: Request, res: Response, next: NextFunction) 
   if (
     reqPath === "/auth/login" ||
     reqPath === "/api/auth/login" ||
+    reqPath === "/auth/refresh" ||
+    reqPath === "/api/auth/refresh" ||
     reqPath === "/webhooks/payment" ||
     reqPath === "/api/webhooks/payment"
   ) {

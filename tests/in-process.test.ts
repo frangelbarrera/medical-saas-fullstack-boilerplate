@@ -129,4 +129,34 @@ describe("createApp() in-process", () => {
     });
     expect([401, 429]).toContain(res.status);
   });
+
+  it("should reject /api/auth/refresh without a refresh token cookie (401)", async () => {
+    const res = await fetch(`${baseUrl}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("should reject /api/auth/refresh with an invalid refresh token (401)", async () => {
+    const res = await fetch(`${baseUrl}/api/auth/refresh`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: "refresh_token=invalid_token_string",
+      },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("should allow /api/auth/refresh without CSRF token (refresh is exempt)", async () => {
+    // The refresh endpoint should NOT return 403 (CSRF failure) even without a CSRF token.
+    // It should return 401 (no refresh token provided) instead.
+    const res = await fetch(`${baseUrl}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).not.toBe(403);
+    expect(res.status).toBe(401);
+  });
 });
