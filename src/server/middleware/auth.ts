@@ -3,7 +3,8 @@
  */
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { JWT_SECRET } from "../config.js";
+import { JWT_SECRET, env } from "../config.js";
+import { isRequestSecure } from "../utils/cookies.js";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -17,13 +18,17 @@ export interface AuthenticatedRequest extends Request {
 }
 
 export const authenticateToken = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  // Read session cookie. In production, use __Host- prefix only (no fallback
-  // to non-prefixed 'token', which would allow cookie injection from subdomains).
-  // In dev, use 'token'. Authorization header is allowed for non-browser API clients.
-  const isProd = process.env.NODE_ENV === "production";
-  const cookieName = isProd ? "__Host-token" : "token";
+  // Read session cookie. The cookie name depends on whether the request is
+  // HTTPS and production: __Host-token (prod + HTTPS) or token (dev/HTTP).
+  // We check both names to handle transitions between environments.
+  const isProd = env.NODE_ENV === "production";
+  const isSecure = isRequestSecure(req);
+  const useHostPrefix = isProd && isSecure;
+  const cookieName = useHostPrefix ? "__Host-token" : "token";
   const token =
-    req.cookies?.[cookieName] || (req.headers["authorization"] && req.headers["authorization"].split(" ")[1]);
+    req.cookies?.[cookieName] ||
+    req.cookies?.token || // fallback for dev/HTTP
+    (req.headers["authorization"] && req.headers["authorization"].split(" ")[1]);
 
   if (!token) return res.sendStatus(401);
 

@@ -17,6 +17,7 @@ import { schemas } from "../schemas/index.js";
 import { env, JWT_SECRET, mockUsers, dbAvailable, pool, clearVolatile } from "../config.js";
 import { generateCsrfToken } from "../utils/crypto.js";
 import { logger } from "../utils/logger.js";
+import { isRequestSecure, getAccessTokenCookieName, getCsrfCookieName } from "../utils/cookies.js";
 import {
   issueAccessToken,
   issueRefreshToken,
@@ -38,22 +39,26 @@ authRouter.post("/api/auth/logout", (req, res) => {
   // Revoke the refresh token if present (no fallback to non-prefixed cookie
   // in production — __Host- prefix must be enforced to prevent subdomain injection).
   const isProd = env.NODE_ENV === "production";
-  const refreshCookieName = getRefreshCookieName(isProd);
+  const isSecure = isRequestSecure(req);
+  const refreshCookieName = getRefreshCookieName(isProd && isSecure);
   const rawRefreshToken = req.cookies?.[refreshCookieName] || (!isProd ? req.cookies?.["refresh_token"] : undefined);
   if (rawRefreshToken) {
     revokeRefreshToken(rawRefreshToken);
   }
 
+  // Clear all possible cookie names (both prefixed and non-prefixed) so logout
+  // works regardless of which cookie was set.
   const cookieOpts = {
     httpOnly: true,
-    secure: true,
+    secure: isSecure,
     sameSite: "lax" as const,
     path: "/",
   };
+  const csrfCookieOpts = { ...cookieOpts, httpOnly: false };
   res.clearCookie("token", cookieOpts);
-  res.clearCookie("csrf_token", { ...cookieOpts, httpOnly: false });
+  res.clearCookie("csrf_token", csrfCookieOpts);
   res.clearCookie("__Host-token", cookieOpts);
-  res.clearCookie("__Host-csrf_token", { ...cookieOpts, httpOnly: false });
+  res.clearCookie("__Host-csrf_token", csrfCookieOpts);
   res.clearCookie("refresh_token", cookieOpts);
   res.clearCookie("__Host-refresh_token", cookieOpts);
   res.json({ success: true });
@@ -115,6 +120,10 @@ authRouter.post("/api/auth/login", authLimiter, validateBody(schemas.login), asy
     }
 
     const isProd = env.NODE_ENV === "production";
+    const isSecure = isRequestSecure(req);
+    // Use __Host- prefix ONLY when both production AND HTTPS (the prefix
+    // requires Secure cookies, which requires HTTPS).
+    const useHostPrefix = isProd && isSecure;
     const csrfToken = generateCsrfToken();
 
     // Access token (8h JWT) in httpOnly cookie
@@ -132,19 +141,19 @@ authRouter.post("/api/auth/login", authLimiter, validateBody(schemas.login), asy
 
     const accessCookieOpts = {
       httpOnly: true,
-      secure: true,
+      secure: isSecure, // dynamic: false on HTTP, true on HTTPS
       sameSite: "lax" as const,
       path: "/",
       maxAge: 8 * 60 * 60 * 1000, // 8 hours
     };
 
-    const tokenCookieName = isProd ? "__Host-token" : "token";
-    const csrfCookieName = isProd ? "__Host-csrf_token" : "csrf_token";
-    const refreshCookieName = getRefreshCookieName(isProd);
+    const tokenCookieName = useHostPrefix ? "__Host-token" : "token";
+    const csrfCookieName = useHostPrefix ? "__Host-csrf_token" : "csrf_token";
+    const refreshCookieName = getRefreshCookieName(useHostPrefix);
 
     res.cookie(tokenCookieName, accessToken, accessCookieOpts);
     res.cookie(csrfCookieName, csrfToken, { ...accessCookieOpts, httpOnly: false });
-    res.cookie(refreshCookieName, rawRefreshToken, getRefreshCookieOptions(isProd));
+    res.cookie(refreshCookieName, rawRefreshToken, getRefreshCookieOptions(useHostPrefix, isSecure));
 
     res.json({
       user: {
@@ -180,9 +189,12 @@ authRouter.post("/api/auth/login", authLimiter, validateBody(schemas.login), asy
 authRouter.post("/api/auth/refresh", authLimiter, async (req, res) => {
   try {
     const isProd = env.NODE_ENV === "production";
-    const refreshCookieName = getRefreshCookieName(isProd);
-    // In production, only accept the __Host- prefixed cookie (no fallback).
-    const rawRefreshToken = req.cookies?.[refreshCookieName] || (!isProd ? req.cookies?.["refresh_token"] : undefined);
+    const isSecure = isRequestSecure(req);
+    const useHostPrefix = isProd && isSecure;
+    const refreshCookieName = getRefreshCookieName(useHostPrefix);
+    // In production with HTTPS, only accept the __Host- prefixed cookie (no fallback).
+    const rawRefreshToken =
+      req.cookies?.[refreshCookieName] || (!useHostPrefix ? req.cookies?.["refresh_token"] : undefined);
 
     if (!rawRefreshToken) {
       return res.status(401).json({ error: "No refresh token provided" });
@@ -242,21 +254,20 @@ authRouter.post("/api/auth/refresh", authLimiter, async (req, res) => {
 
     const csrfToken = generateCsrfToken();
 
-    const isProd2 = env.NODE_ENV === "production";
     const accessCookieOpts = {
       httpOnly: true,
-      secure: true,
+      secure: isSecure, // dynamic
       sameSite: "lax" as const,
       path: "/",
       maxAge: 8 * 60 * 60 * 1000,
     };
-    const tokenCookieName = isProd2 ? "__Host-token" : "token";
-    const csrfCookieName = isProd2 ? "__Host-csrf_token" : "csrf_token";
-    const refreshCookieName2 = getRefreshCookieName(isProd2);
+    const tokenCookieName = useHostPrefix ? "__Host-token" : "token";
+    const csrfCookieName = useHostPrefix ? "__Host-csrf_token" : "csrf_token";
+    const refreshCookieName2 = getRefreshCookieName(useHostPrefix);
 
     res.cookie(tokenCookieName, accessToken, accessCookieOpts);
     res.cookie(csrfCookieName, csrfToken, { ...accessCookieOpts, httpOnly: false });
-    res.cookie(refreshCookieName2, newRawRefreshToken, getRefreshCookieOptions(isProd2));
+    res.cookie(refreshCookieName2, newRawRefreshToken, getRefreshCookieOptions(useHostPrefix, isSecure));
 
     res.json({
       user: {

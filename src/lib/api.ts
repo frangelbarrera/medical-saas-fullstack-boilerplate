@@ -1,6 +1,13 @@
 // src/lib/api.ts
 
-const API_BASE = "/api";
+// API base URL: defaults to "/api" for same-origin (dev server proxy or
+// Vercel rewrites). For cross-origin deployments (frontend on Vercel,
+// backend on a VPS), set VITE_API_BASE_URL to the backend's absolute URL
+// (e.g. "https://api.your-domain.com"). The trailing /api is added by the
+// callers, so VITE_API_BASE_URL should be the origin or empty.
+const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL
+  ? `${(import.meta as any).env.VITE_API_BASE_URL.replace(/\/$/, "")}/api`
+  : "/api";
 
 // CSRF token: stored in memory after login. The server also sets it as a
 // non-httpOnly cookie, but we prefer the in-memory value to avoid stale tokens

@@ -164,12 +164,15 @@ export const getRefreshCookieName = (isProd: boolean): string =>
 
 /**
  * Get the cookie options for the refresh token.
+ *
+ * `secure` is now dynamic: it must be true on HTTPS (production), but false
+ * on HTTP (local dev, or a backend VPS without TLS yet). With secure=true on
+ * HTTP, the browser silently drops the cookie and login appears to fail.
  */
-export const getRefreshCookieOptions = (isProd: boolean) => ({
+export const getRefreshCookieOptions = (isProd: boolean, isSecure: boolean) => ({
   httpOnly: true,
-  secure: true,
+  secure: isSecure,
   sameSite: "lax" as const,
   path: "/",
   maxAge: REFRESH_TOKEN_TTL_MS,
-  ...(isProd ? {} : {}),
 });
