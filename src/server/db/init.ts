@@ -10,13 +10,14 @@
  */
 import bcrypt from "bcryptjs";
 import { pool, setDbAvailable } from "../config.js";
+import { logger } from "../utils/logger.js";
 
 export async function initDb(): Promise<void> {
   let client;
   try {
     client = await pool.connect();
     setDbAvailable(true);
-    console.log("[db] Connected to PostgreSQL successfully.");
+    logger.info({ msg: "PostgreSQL connected" });
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -63,17 +64,16 @@ export async function initDb(): Promise<void> {
           "INSERT INTO users (id, username, password, name, role, clinic_id) VALUES ($1, $2, $3, $4, $5, $6)",
           ["admin_root", adminUsername, hashedPassword, adminName, "ADMIN", clinicId],
         );
-        console.log(
-          `[db] Initial admin '${adminUsername}' provisioned. Change the password immediately after first login.`,
-        );
+        logger.info({ msg: "Initial admin provisioned", adminUsername });
+        logger.warn({ msg: "Change the admin password immediately after first login" });
       }
     } else {
-      console.warn("[db] ADMIN_USERNAME / ADMIN_PASSWORD not set. No initial admin seeded.");
-      console.warn("[db] To create the first admin, set ADMIN_USERNAME and ADMIN_PASSWORD env vars and restart.");
+      logger.warn({ msg: "ADMIN_USERNAME / ADMIN_PASSWORD not set, no admin seeded" });
+      logger.warn({ msg: "Set ADMIN_USERNAME and ADMIN_PASSWORD env vars and restart to create the first admin" });
     }
   } catch (err) {
     setDbAvailable(false);
-    console.warn("[db] PostgreSQL not available. Running in mock mode.");
+    logger.warn({ msg: "PostgreSQL not available, running in mock mode" });
   } finally {
     if (client) client.release();
   }

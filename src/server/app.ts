@@ -13,6 +13,7 @@ import { env } from "./config.js";
 import { csrfProtection } from "./middleware/csrf.js";
 import { corsMiddleware, helmetMiddleware, globalLimiter } from "./middleware/security.js";
 import { setupSwagger } from "../lib/swagger.js";
+import { logger, createHttpLogger } from "./utils/logger.js";
 
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
@@ -34,6 +35,9 @@ const __dirname = path.dirname(__filename);
 
 export async function createApp(): Promise<express.Application> {
   const app = express();
+
+  // HTTP request logger (pino-http) — logs every request with PHI redacted
+  app.use(await createHttpLogger());
 
   // CORS (credentials: true for cookies)
   app.use(corsMiddleware);

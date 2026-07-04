@@ -9,6 +9,7 @@ import crypto from "crypto";
 import { env, mockInvoices, mockAuditLogs } from "../config.js";
 import { generateRandomId } from "../utils/crypto.js";
 import { appendAuditLog } from "../utils/audit.js";
+import { logger } from "../utils/logger.js";
 
 export const webhooksRouter = Router();
 
@@ -66,7 +67,7 @@ webhooksRouter.post("/api/webhooks/payment", async (req: Request, res: Response)
 
     res.json({ success: true });
   } catch (err: any) {
-    console.error("[webhook] Error:", err);
+    logger.error({ msg: "Webhook processing error", error: err });
     res.status(500).json({ error: "Internal server error" });
   }
 });

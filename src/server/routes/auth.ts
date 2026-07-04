@@ -10,6 +10,7 @@ import { validateBody } from "../middleware/validate.js";
 import { schemas } from "../schemas/index.js";
 import { env, JWT_SECRET, mockUsers, dbAvailable, pool, clearVolatile } from "../config.js";
 import { generateCsrfToken } from "../utils/crypto.js";
+import { logger } from "../utils/logger.js";
 
 export const authRouter = Router();
 
@@ -58,7 +59,7 @@ authRouter.post("/api/auth/login", authLimiter, validateBody(schemas.login), asy
           };
         }
       } catch (dbErr) {
-        console.warn("[auth] DB login query failed");
+        logger.warn({ msg: "DB login query failed" });
       }
     }
 

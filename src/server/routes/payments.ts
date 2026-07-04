@@ -11,6 +11,7 @@ import { schemas } from "../schemas/index.js";
 import { env, mockAuditLogs, mockInvoices } from "../config.js";
 import { generateRandomId } from "../utils/crypto.js";
 import { appendAuditLog } from "../utils/audit.js";
+import { logger } from "../utils/logger.js";
 
 export const paymentsRouter = Router();
 
@@ -27,7 +28,7 @@ paymentsRouter.post(
 
     // TEST MODE if no token configured
     if (!PAYMENT_GATEWAY_TOKEN) {
-      console.warn("[payment] PAYMENT_GATEWAY_TOKEN not configured. Using test URL.");
+      logger.warn({ msg: "PAYMENT_GATEWAY_TOKEN not configured, using test URL" });
       appendAuditLog({
         id: generateRandomId("log"),
         clinic_id: clinicId,
@@ -97,7 +98,7 @@ paymentsRouter.post(
 
       res.json({ paymentUrl: data.paymentUrl, paymentId: data.paymentId });
     } catch (err: any) {
-      console.error("[payment] Gateway error:", err.message);
+      logger.error({ msg: "Payment gateway error", error: err.message });
       res.status(500).json({ error: "Payment gateway error" });
     }
   },

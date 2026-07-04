@@ -58,7 +58,8 @@ export async function startTestServer(port = 3999): Promise<{
 
     const onData = (data: Buffer) => {
       const msg = data.toString();
-      if (msg.includes("Server running")) {
+      // Match both the old "🚀 Server running" and new pino "Server running" log
+      if (msg.includes("Server running") || msg.includes('"msg":"Server running"')) {
         clearTimeout(timeout);
         resolve();
       }

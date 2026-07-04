@@ -16,6 +16,7 @@
 import { createApp } from "./app.js";
 import { initDb } from "./db/init.js";
 import { env } from "./config.js";
+import { logger } from "./utils/logger.js";
 
 export { createApp };
 
@@ -27,10 +28,10 @@ if (shouldStart) {
     const app = await createApp();
     const PORT = env.PORT;
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      logger.info({ msg: "Server running", url: `http://localhost:${PORT}`, env: env.NODE_ENV });
     });
   })().catch((err) => {
-    console.error("[server] Fatal startup error:", err);
+    logger.error({ msg: "Fatal startup error", error: err });
     process.exit(1);
   });
 }
