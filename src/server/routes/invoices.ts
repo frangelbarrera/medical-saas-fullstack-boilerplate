@@ -1,11 +1,15 @@
 /**
  * Invoice routes.
+ *
+ * SECURITY:
+ *  - patientId and doctorId from the body are verified to belong to the caller's clinic.
+ *  - status is forced to "Pending" on creation (prevents creating already-Paid invoices).
  */
 import { Router } from "express";
-import { AuthenticatedRequest, authenticateToken } from "../middleware/auth.js";
+import { AuthenticatedRequest, authenticateToken, assertClinicOwnership } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { schemas } from "../schemas/index.js";
-import { mockInvoices } from "../config.js";
+import { mockInvoices, mockPatients, mockUsers } from "../config.js";
 import { generateRandomId } from "../utils/crypto.js";
 import { appendAuditLog } from "../utils/audit.js";
 
@@ -54,6 +58,23 @@ invoicesRouter.post(
     const id = generateRandomId("inv");
 
     try {
+      // SECURITY: verify patientId belongs to the caller's clinic.
+      const patient = mockPatients.find((p) => p.id === patientId);
+      if (!patient || !assertClinicOwnership(patient.clinic_id, clinicId)) {
+        return res.status(400).json({ error: "patientId does not belong to your clinic" });
+      }
+
+      // SECURITY: verify doctorId if provided.
+      if (doctorId) {
+        const doctor = mockUsers.find((u) => u.id === doctorId && u.clinic_id === clinicId);
+        if (!doctor) {
+          return res.status(400).json({ error: "doctorId does not refer to a user in your clinic" });
+        }
+      }
+
+      // SECURITY: force status to "Pending" on creation. The client cannot
+      // create an already-Paid invoice (which would be financial fraud).
+      // Only the payment webhook can mark an invoice as Paid.
       const newInv = {
         id,
         patient_id: patientId,
@@ -63,7 +84,7 @@ invoicesRouter.post(
         concept,
         amount,
         payment_method: paymentMethod,
-        status,
+        status: "Pending",
         insurance_company: insuranceCompany,
         date,
         clinic_id: clinicId,
@@ -77,7 +98,7 @@ invoicesRouter.post(
         action: "INVOICE_CREATE",
         target: id,
         type: "FINANCE",
-        details: { patientId, amount, paymentMethod },
+        details: { patientId, amount, paymentMethod, requestedStatus: status, forcedStatus: "Pending" },
       });
       res.json({
         ...newInv,

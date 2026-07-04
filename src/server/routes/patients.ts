@@ -2,7 +2,7 @@
  * Patient routes (PHI encrypted at rest).
  */
 import { Router } from "express";
-import { AuthenticatedRequest, authenticateToken, assertClinicOwnership } from "../middleware/auth.js";
+import { AuthenticatedRequest, authenticateToken, requireRole, assertClinicOwnership } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { schemas } from "../schemas/index.js";
 import { mockPatients } from "../config.js";
@@ -118,29 +118,36 @@ patientsRouter.put(
   },
 );
 
-patientsRouter.delete("/api/patients/:id", authenticateToken, async (req: AuthenticatedRequest, res) => {
-  try {
-    const idx = mockPatients.findIndex((p) => p.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: "Patient not found" });
-    if (!assertClinicOwnership(mockPatients[idx].clinic_id, req.user!.clinicId)) {
-      return res.status(404).json({ error: "Patient not found" });
+// DELETE patients requires ADMIN — secretary/doctor must not be able to
+// permanently destroy PHI (HIPAA retention requirements).
+patientsRouter.delete(
+  "/api/patients/:id",
+  authenticateToken,
+  requireRole("ADMIN"),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const idx = mockPatients.findIndex((p) => p.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "Patient not found" });
+      if (!assertClinicOwnership(mockPatients[idx].clinic_id, req.user!.clinicId)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+      mockPatients.splice(idx, 1);
+      appendAuditLog({
+        id: generateRandomId("log"),
+        clinic_id: req.user!.clinicId,
+        user_id: req.user!.id,
+        user_name: req.user!.name,
+        action: "PATIENT_DELETE",
+        target: req.params.id,
+        type: "PHI",
+        details: {},
+      });
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
     }
-    mockPatients.splice(idx, 1);
-    appendAuditLog({
-      id: generateRandomId("log"),
-      clinic_id: req.user!.clinicId,
-      user_id: req.user!.id,
-      user_name: req.user!.name,
-      action: "PATIENT_DELETE",
-      target: req.params.id,
-      type: "PHI",
-      details: {},
-    });
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+  },
+);
 
 patientsRouter.get("/api/patients/:id", authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {

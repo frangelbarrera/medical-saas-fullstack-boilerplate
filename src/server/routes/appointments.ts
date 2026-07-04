@@ -1,11 +1,16 @@
 /**
  * Appointment routes.
+ *
+ * SECURITY: patientId and doctorId from the request body are verified to
+ * belong to the caller's clinic before storing. This prevents cross-clinic
+ * reference forgery (creating an appointment that references a real patient
+ * or doctor from another clinic).
  */
 import { Router } from "express";
 import { AuthenticatedRequest, authenticateToken, assertClinicOwnership } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { schemas } from "../schemas/index.js";
-import { mockAppointments } from "../config.js";
+import { mockAppointments, mockPatients, mockUsers } from "../config.js";
 import { generateRandomId } from "../utils/crypto.js";
 import { appendAuditLog } from "../utils/audit.js";
 
@@ -41,6 +46,30 @@ appointmentsRouter.post(
     const id = generateRandomId("appt");
 
     try {
+      // SECURITY: verify patientId belongs to the caller's clinic.
+      const patient = mockPatients.find((p) => p.id === patientId);
+      if (!patient || !assertClinicOwnership(patient.clinic_id, clinicId)) {
+        return res.status(400).json({ error: "patientId does not belong to your clinic" });
+      }
+
+      // SECURITY: verify doctorId refers to a real DOCTOR in the caller's clinic.
+      const doctor = mockUsers.find(
+        (u) => u.id === doctorId && u.clinic_id === clinicId && u.role === "DOCTOR" && u.is_active,
+      );
+      if (!doctor) {
+        return res.status(400).json({ error: "doctorId does not refer to an active doctor in your clinic" });
+      }
+
+      // SECURITY: reject appointments in the past (prevents backdating).
+      const apptDate = new Date(dateTime);
+      if (isNaN(apptDate.getTime())) {
+        return res.status(400).json({ error: "dateTime is not a valid ISO date" });
+      }
+      if (apptDate.getTime() < Date.now() - 60 * 1000) {
+        // 60s grace window for clock skew
+        return res.status(400).json({ error: "Cannot schedule appointments in the past" });
+      }
+
       const newAppt = {
         id,
         patient_name: patientName,
@@ -51,7 +80,7 @@ appointmentsRouter.post(
         date_time: dateTime,
         clinic_id: clinicId,
         doctor_id: doctorId,
-        doctor_name: doctorName,
+        doctor_name: doctor.name, // use the verified doctor name from DB
         created_at: new Date().toISOString(),
       };
       mockAppointments.push(newAppt);

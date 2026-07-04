@@ -105,6 +105,26 @@ usersRouter.put(
       if (req.params.id === req.user!.id && (isActive === false || (role && role !== req.user!.role))) {
         return res.status(400).json({ error: "Cannot change your own role or deactivate yourself" });
       }
+      // SECURITY: validate role against enum (prevents 'SUPERADMIN' injection).
+      if (role !== undefined) {
+        const allowedRoles = ["ADMIN", "DOCTOR", "SECRETARY"];
+        if (!allowedRoles.includes(role)) {
+          return res.status(400).json({ error: `Invalid role. Allowed: ${allowedRoles.join(", ")}` });
+        }
+      }
+      // SECURITY: verify managedDoctorIds refer to real DOCTOR users in the caller's clinic.
+      if (managedDoctorIds !== undefined) {
+        for (const docId of managedDoctorIds) {
+          const doctor = mockUsers.find(
+            (u) => u.id === docId && u.clinic_id === req.user!.clinicId && u.role === "DOCTOR",
+          );
+          if (!doctor) {
+            return res
+              .status(400)
+              .json({ error: `managedDoctorId '${docId}' does not refer to a doctor in your clinic` });
+          }
+        }
+      }
       if (name !== undefined) mockUsers[idx].name = name;
       if (role !== undefined) mockUsers[idx].role = role;
       if (isActive !== undefined) mockUsers[idx].is_active = isActive;
