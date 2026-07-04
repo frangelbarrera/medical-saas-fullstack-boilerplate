@@ -440,7 +440,7 @@ export function FinanceView() {
           <FinanceModal 
             title="New Invoice" 
             onClose={() => setShowInvoiceModal(false)}
-            onSubmit={async (data) => {
+            onSubmit={async (data: any) => {
               const res = await api.invoices.create({
                 ...data,
                 clinicId,
@@ -459,7 +459,7 @@ export function FinanceView() {
           <FinanceModal 
             title="Register Expense" 
             onClose={() => setShowExpenseModal(false)}
-            onSubmit={async (data) => {
+            onSubmit={async (data: any) => {
               const res = await api.expenses.create({
                 ...data,
                 clinicId,

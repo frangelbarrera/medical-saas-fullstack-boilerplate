@@ -264,29 +264,29 @@ const generateCsrfToken = () => crypto.randomBytes(32).toString('hex');
 // Security Headers with explicit CSP.
 // In development, Vite needs 'unsafe-inline' for styles and connects to itself.
 // In production, the policy is strict.
-const cspDirectives = env.NODE_ENV === 'production'
+const cspDirectives: Record<string, any> = env.NODE_ENV === 'production'
   ? {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"], // Tailwind requires inline styles
-      imgSrc: ["'self'", "data:", "https:"],
-      fontSrc: ["'self'", "data:"],
-      connectSrc: ["'self'"],
-      frameAncestors: ["'none'"],
-      formAction: ["'self'"],
-      baseUri: ["'self'"],
-      objectSrc: ["'none'"],
-      upgradeInsecureRequests: [],
+      'default-src': ["'self'"],
+      'script-src': ["'self'"],
+      'style-src': ["'self'", "'unsafe-inline'"], // Tailwind requires inline styles
+      'img-src': ["'self'", "data:", "https:"],
+      'font-src': ["'self'", "data:"],
+      'connect-src': ["'self'"],
+      'frame-ancestors': ["'none'"],
+      'form-action': ["'self'"],
+      'base-uri': ["'self'"],
+      'object-src': ["'none'"],
+      'upgrade-insecure-requests': [],
     }
   : {
       // Dev: more permissive to allow Vite HMR over websockets
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "https:"],
-      fontSrc: ["'self'", "data:"],
-      connectSrc: ["'self'", "ws:", "wss:"],
-      frameAncestors: ["'none'"],
+      'default-src': ["'self'"],
+      'script-src': ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      'style-src': ["'self'", "'unsafe-inline'"],
+      'img-src': ["'self'", "data:", "https:"],
+      'font-src': ["'self'", "data:"],
+      'connect-src': ["'self'", "ws:", "wss:"],
+      'frame-ancestors': ["'none'"],
     };
 
 app.use(helmet({
