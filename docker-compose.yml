@@ -1,35 +1,58 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15-alpine
     container_name: medical_saas_db
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${PGUSER:-postgres}
-      POSTGRES_PASSWORD: ${PGPASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?PGPASSWORD is required}
       POSTGRES_DB: ${PGDATABASE:-medical_saas_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-postgres} -d ${PGDATABASE:-medical_saas_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Do NOT expose postgres to the host in production.
+    # Only the app service should reach it via the internal network.
+    # ports:
+    #   - "5432:5432"
 
   app:
     build: .
     container_name: medical_saas_app
-    restart: always
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
+      NODE_ENV: production
+      PORT: 3000
+      FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required}
+      # Database
       PGHOST: db
       PGPORT: 5432
       PGUSER: ${PGUSER:-postgres}
-      PGPASSWORD: ${PGPASSWORD:-postgres}
+      PGPASSWORD: ${PGPASSWORD:?PGPASSWORD is required}
       PGDATABASE: ${PGDATABASE:-medical_saas_db}
-      JWT_SECRET: ${JWT_SECRET:-medical_saas_secret_key_2026}
-      NODE_ENV: production
+      # Required secrets (no defaults - the app will crash if missing)
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (min 32 chars)}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required (64 hex chars)}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?PAYMENT_WEBHOOK_SECRET is required}
+      # First admin provisioning (optional - if not set, no admin is seeded)
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_NAME: ${ADMIN_NAME:-System Administrator}
+      ADMIN_CLINIC_ID: ${ADMIN_CLINIC_ID:-clinic_default}
+      ADMIN_CLINIC_NAME: ${ADMIN_CLINIC_NAME:-Default Clinic}
+      # Optional integrations
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      PAYMENT_GATEWAY_TOKEN: ${PAYMENT_GATEWAY_TOKEN:-}
+      PAYMENT_GATEWAY_URL: ${PAYMENT_GATEWAY_URL:-https://pay.payphone.com.ec/api/button/Prepare}
+      LLM_PHI_MODE: ${LLM_PHI_MODE:-strip}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:
