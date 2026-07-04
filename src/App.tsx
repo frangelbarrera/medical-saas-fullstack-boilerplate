@@ -1,7 +1,7 @@
 import React, { useState, useEffect, createContext, useContext, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Toaster, toast } from "sonner";
-import { api, setCsrfToken } from "./lib/api";
+import { api, setCsrfToken, isDemoMode } from "./lib/api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Ico } from "./components/Ico";
 import { DashboardView } from "./components/DashboardView";
@@ -152,6 +152,15 @@ export default function App() {
       setUser(u);
       setClinicId(u.clinicId);
       setRole(u.role);
+
+      // Notify user if running in demo mode (no backend available)
+      setTimeout(() => {
+        if (isDemoMode()) {
+          toast.info("Demo mode active. Data is mock and resets on refresh. Changes are not persisted.", {
+            duration: 6000,
+          });
+        }
+      }, 500);
 
       // Set initial view based on role
       if (u.role === "SECRETARY") setView("sec-dashboard");

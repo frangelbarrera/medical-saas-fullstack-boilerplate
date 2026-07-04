@@ -251,6 +251,29 @@ The boilerplate ships with two database modes:
 
 ---
 
+## Demo (Vercel)
+
+A live demo is deployed at: **https://medical-saas-fullstack-boilerplate.vercel.app/**
+
+The Vercel deployment runs in **demo mode** (no backend). The frontend detects
+when no backend is available and falls back to client-side mock data so the UI
+is fully explorable. Data is stored in `localStorage` and resets on refresh.
+
+### Demo credentials
+
+| Role | Username | Password | Access |
+|------|----------|----------|--------|
+| Administrator | `admin` | `admin` | Full system access, audit logs, finances, user management |
+| Doctor | `doctor` | `doctor` | Clinical view, AI Scribe, patient consultations, medical records |
+| Secretary | `secretary` | `secretary` | Agenda management, patient intake, triage statuses, billing |
+
+> **Note**: Demo mode uses mock data in the browser. No real authentication or
+> database is involved. To run the full backend (with real auth, encryption,
+> audit trail, and AI), deploy the backend on a VPS using Docker Compose
+> (see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)).
+
+---
+
 ## Quick Start
 
 ### 1. Clone & Install

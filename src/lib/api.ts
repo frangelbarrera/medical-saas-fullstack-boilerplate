@@ -25,6 +25,25 @@ const getCsrfTokenFromCookie = (): string | null => {
   return match ? decodeURIComponent(match.split("=")[1]) : null;
 };
 
+// Demo mode flag: set to true if the backend is not reachable.
+// This allows the app to run as a static demo (e.g. on Vercel without backend).
+let demoMode: boolean | null = null;
+
+export const isDemoMode = (): boolean => demoMode === true;
+
+const checkDemoMode = async (): Promise<boolean> => {
+  if (demoMode !== null) return demoMode;
+  try {
+    const res = await fetch(`${API_BASE}/health`, { headers: { Accept: "application/json" } });
+    const ct = res.headers.get("content-type") || "";
+    // If we get JSON, the backend is alive
+    demoMode = !ct.includes("application/json");
+  } catch {
+    demoMode = true; // network error -> no backend
+  }
+  return demoMode;
+};
+
 async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -40,6 +59,32 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
     }
   }
 
+  // Check if we should use demo mode (cached after first check)
+  const useDemo = await checkDemoMode();
+
+  if (useDemo) {
+    // Use client-side mock
+    const { handleDemoRequest } = await import("./demo-mode.js");
+    const result = await handleDemoRequest(path, options);
+    if (!result) {
+      throw new Error("Not found in demo mode");
+    }
+    if (result.status >= 400) {
+      const err = new Error(result.data?.error || `Request failed with status ${result.status}`);
+      (err as any).status = result.status;
+      throw err;
+    }
+    // Store CSRF token from login response
+    if (path === "/auth/login" && result.data?.csrfToken) {
+      csrfToken = result.data.csrfToken;
+    }
+    if (result.status === 401 && !path.includes("/auth/login")) {
+      window.dispatchEvent(new Event("auth_unauthorized"));
+    }
+    return result.data as T;
+  }
+
+  // Real backend request
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers,
