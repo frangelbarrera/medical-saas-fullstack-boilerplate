@@ -421,10 +421,6 @@ export default function App() {
             >
               {isSubmitting ? "Signing In..." : "Sign In"}
             </button>
-            <p style={{ fontSize: 10, color: text3, marginTop: 8 }}>
-              Demo: <strong>admin</strong>, <strong>doctor</strong>, or <strong>secretary</strong> (Password:{" "}
-              <strong>admin</strong>)
-            </p>
           </form>
         </GCard>
       </div>
