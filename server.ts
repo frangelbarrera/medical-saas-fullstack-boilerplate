@@ -244,11 +244,16 @@ const csrfProtection = (req: any, res: any, next: any) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     return next();
   }
-  // Webhook has its own HMAC verification, skip CSRF there
-  if (req.path === '/api/webhooks/payment') {
+  // Login doesn't have a CSRF token yet (it's the request that issues one).
+  // Webhook has its own HMAC verification.
+  // req.path inside a middleware mounted on '/api/' is relative (e.g. '/auth/login'),
+  // so we check both the relative and original URL forms.
+  const path = req.path || '';
+  if (path === '/auth/login' || path === '/api/auth/login' ||
+      path === '/webhooks/payment' || path === '/api/webhooks/payment') {
     return next();
   }
-  const cookieToken = req.cookies?.csrf_token;
+  const cookieToken = req.cookies?.csrf_token || req.cookies?.['__Host-csrf_token'];
   const headerToken = req.headers['x-csrf-token'];
   if (!cookieToken || !headerToken || cookieToken !== headerToken) {
     return res.status(403).json({ error: "CSRF token missing or invalid." });
@@ -1470,7 +1475,7 @@ async function startServer() {
     });
   }
 
-  const PORT = 3000;
+  const PORT = env.PORT;
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
   });
