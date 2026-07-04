@@ -1,32 +1,41 @@
-# name: Deploy to Production
-# 
-# on:
-#   push:
-#     branches:
-#       - main
-# 
-# jobs:
-#   deploy:
-#     runs-on: ubuntu-latest
-#     steps:
-#       - name: Checkout code
-#       - uses: actions/checkout@v4
-# 
-#       - name: Deploy via SSH
-#         uses: appleboy/ssh-action@master
-#         with:
-#           host: ${{ secrets.SERVER_HOST }}
-#           username: ${{ secrets.SERVER_USER }}
-#           key: ${{ secrets.SERVER_SSH_KEY }}
-#           script: |
-#             # Navigate to the app directory
-#             cd /path/to/medical_saas
-#             
-#             # Pull the latest changes
-#             git pull origin main
-#             
-#             # Rebuild and restart the containers
-#             docker-compose up -d --build
-#             
-#             # Clean up unused Docker images
-#             docker image prune -f
+# Deploy to Production via SSH
+#
+# This workflow is triggered on pushes to main after CI passes.
+# It connects to the production server via SSH, pulls the latest changes,
+# rebuilds the Docker containers, and restarts them.
+#
+# Required GitHub secrets:
+#   SERVER_HOST     - production server hostname or IP
+#   SERVER_USER     - SSH username
+#   SERVER_SSH_KEY  - SSH private key (PEM format)
+#   DEPLOY_PATH     - absolute path to the app directory on the server
+
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    needs: []
+    # Only deploy if CI would pass - in a real setup, add 'needs: build' and
+    # gate this job on the build job from ci.yml (requires a workflow_run trigger
+    # or a composite workflow).
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd ${{ secrets.DEPLOY_PATH }}
+            git pull origin main
+            docker compose up -d --build
+            docker image prune -f

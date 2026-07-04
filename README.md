@@ -1,14 +1,15 @@
 # Full-Stack Medical SaaS Boilerplate
-### Enterprise-grade Clinical Management System with Privacy-First AI
+
+### HIPAA-aware Clinical Management System with Privacy-First AI
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6.svg)](https://www.typescriptlang.org/)
 [![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-336791.svg)](https://www.postgresql.org/)
-[![CI](https://github.com/frangelbarrera/Medical-SaaS-Boilerplate/actions/workflows/ci.yml/badge.svg)](https://github.com/frangelbarrera/Medical-SaaS-Boilerplate/actions/workflows/ci.yml)
+[![CI](https://github.com/frangelbarrera/medical-saas-fullstack-boilerplate/actions/workflows/ci.yml/badge.svg)](https://github.com/frangelbarrera/medical-saas-fullstack-boilerplate/actions/workflows/ci.yml)
 
-**Medical SaaS Boilerplate** is a production-grade Clinical Management System (CMS) designed for the modern medical era. It bridges the gap between complex clinical workflows and cutting-edge artificial intelligence, all while maintaining the highest standards of data sovereignty and cybersecurity.
+A full-stack medical SaaS boilerplate with role-based access control, application-level encryption for PHI, tamper-evident audit logging, and an AI clinical assistant. Designed as a starting point for medical SaaS products — **not** a turnkey HIPAA-compliant product.
 
-> "Empowering medical professionals through precise intelligence and uncompromising security."
+> **Disclaimer**: This boilerplate implements HIPAA-aware patterns (encryption at rest, audit trail, RBAC, minimum-necessary role isolation). It is **not** certified HIPAA-compliant. Before deploying with real Protected Health Information (PHI), you must complete infrastructure hardening, sign BAAs with all third-party vendors (Google for Gemini, your DB provider, etc.), and pass a formal HIPAA security risk assessment.
 
 ![Main Dashboard](public/Screenshots/1.png)
 
@@ -17,19 +18,19 @@
 ## Key Features by Role
 
 ### Administrators
-*   **Global Clinic Control:** Manage staff, infrastructure settings, and multi-tenant configurations.
-*   **Audit Forensics:** Complete traceability of every interaction within the system, crucial for compliance and security auditing.
-*   **Financial Intelligence:** Real-time dashboards for revenue, expenses, and insurance claim tracking.
+- **Clinic Control**: Manage staff, infrastructure settings, and clinic configuration.
+- **Audit Forensics**: Tamper-evident audit trail (SHA-256 hash chain) of every state-changing action.
+- **Financial Intelligence**: Dashboards for revenue, expenses, and insurance claim tracking.
 
 ### Doctors
-*   **AI Scribe:** Real-time consultation recording that automatically extracts vital signs, clinical evolution, and ICD-10 diagnoses.
-*   **EHR Timeline:** A holistic, chronological view of a patient's entire medical history and diagnostic journey.
-*   **Smart Chat Assistant:** Context-aware clinical assistant capables of querying patient records to provide diagnostic support.
+- **AI Scribe**: Mock endpoint that simulates extraction of vital signs, evolution, and ICD-10 diagnoses from consultation audio.
+- **EHR Timeline**: Chronological view of a patient's medical history and diagnostic journey.
+- **Smart Chat Assistant**: Context-aware clinical assistant that queries patient records (with PHI stripped before LLM calls).
 
 ### Secretariat
-*   **Advanced Agenda:** High-performance appointment scheduling with real-time status tracking (Scheduled, Active, Completed, No-Show).
-*   **Patient Intake:** Streamlined registration process with built-in validation for National IDs and clinical prioritization.
-*   **Billing & Payments:** Direct integration with digital payment platforms (Payphone) and insurance management.
+- **Agenda**: Appointment scheduling with status tracking (Scheduled, Active, Completed, No-Show).
+- **Patient Intake**: Patient registration with national ID validation.
+- **Billing & Payments**: Integration with digital payment platforms (Payphone) with HMAC-verified webhooks.
 
 | Patient Directory | Medical Agenda |
 | :---: | :---: |
@@ -37,183 +38,271 @@
 
 ---
 
-## Cybersecurity & Architecture
+## Security Architecture
 
-As an application designed by and for engineering standards, Medical SaaS Boilerplate prioritizes a **Zero-Trust** and **Forensic-Ready** architecture:
+### Authentication & Authorization
+- **JWT** in `HttpOnly`, `Secure`, `SameSite=Lax` cookies (no `localStorage` exposure).
+- **`__Host-` cookie prefix** in production (forces `Secure`, `Path=/`, no `Domain`).
+- **RBAC middleware** (`requireRole(...)`) applied to every privileged endpoint. Role checks are enforced server-side, not just by hiding UI.
+- **bcrypt** password hashing (cost factor 12).
+- **Per-session CSRF token** (double-submit cookie pattern). The token is generated server-side on login and must be sent back as `x-csrf-token` header for state-changing requests.
 
-*   **Auditability (Forensic Logging):** Every action (create, update, delete, login attempt) is recorded in an immutable audit trail, including IP addresses, User Agents, and detailed payload metadata.
-*   **Strict Configuration (Zod Validation):** The backend utilizes **Zod** to perform runtime validation of all environment variables, ensuring that missing keys or insecure configurations prevent the system from starting in an unstable state.
-*   **Data Integrity:** Engineered with **PostgreSQL**, utilizing relational constraints and JSONB indexing to ensure surgical precision in patient data handling.
-*   **Role-Based Access Control (RBAC):** Strict permission layering ensures that users only access what they need. Sensitivity filters protect Electronic Health Records from unauthorized eyes.
-*   **End-to-End Encryption:** JWT-based authentication with high-entropy secrets and BCrypt hashing for credential security.
-*   **AI Sovereignty:** While supporting Cloud AI (Gemini), Medical SaaS Boilerplate is architected for local deployment with **Ollama**, ensuring patient data *never* leaves the physical clinic infrastructure if required.
+### Multi-Tenant Isolation
+- Every query filters by `clinicId` taken from the JWT (`req.user.clinicId`), **never** from the request body or query string.
+- Resources that don't belong to the caller's clinic return `404` (not `403`) to avoid leaking existence.
+- Self-protection: a user cannot delete their own account, change their own role, or deactivate themselves.
 
-### Educational Security Hardening (Current Implementations)
-As an educational resource for cybersecurity in medical applications, the following mitigations have been successfully deployed in this boilerplate:
+### Application-Level Encryption
+- **AES-256-GCM** (authenticated encryption) for PHI fields: `dni`, `email`, `phone`, `birth_date`.
+- The auth tag prevents ciphertext tampering (mitigates padding oracle and bit-flipping attacks).
+- Ciphertext format: `iv:authTag:ciphertext` (all hex).
+- `decryptPHI` throws on auth tag failure (never returns partial/decrypted data).
+- `ENCRYPTION_KEY` is sourced from validated environment variables — the app crashes on startup if missing or malformed.
 
-1. **Request Rate Limiting:** Global and Auth-specific rate limiting (`express-rate-limit`) to mitigate Brute Force attacks and Denial of Service (DoS) against login endpoints.
-2. **Context Security Policies (CSP) & Headers:** Integration of `helmet` to mask Express server fingerprints (removing `X-Powered-By`), protecting against Clickjacking (X-Frame-Options), and mitigating Cross-Site Scripting (XSS).
-3. **Payload Mitigation:** Express payload sanitization (`limit: '1mb'`) to prevent buffer overflows or oversized payload crashes (Billion Laughs / JSON dos).
-4. **Token Expiry Governance:** JWT tokens enforce strict `8h` expiration windows to limit token hijack lifespans.
-5. **HTTP-only Secure Cookies:** JWT tokens have been migrated out of `localStorage` (which is vulnerable to XSS extraction) and are now delivered via `HttpOnly`, `Secure`, `SameSite=Strict` cookies.
-6. **Strict Payload Validation (Zod):** *All* API endpoints (`POST`, `PUT`) are now strictly guarded by Zod schema validations. This natively mitigates Mass Assignment vulnerabilities, unhandled exceptions from malformed inputs, NoSQL injection bypasses, and type-juggling attacks.
-7. **CORS Governance:** Explicitly configured Cross-Origin Resource Sharing (CORS) strictly tied to the frontend origin securely avoiding wildcard data exposure.
-8. **CSRF Header Protection:** Implemented custom Cross-Site Request Forgery (CSRF) header validation (`x-csrf-token: fetch`) relying on strict Same Origin pre-flights for state-altering requests.
-9. **Application-Level Encryption (ALE) for PHI:** Strict PII and PHI fields (such as National IDs, Phone numbers, and Birthdates) are now dynamically encrypted and decrypted in transit using Node's native `crypto` module with AES-256-CBC, preventing data exposure if the operational database is compromised.
-10. **Tamper-Evident Audit Logging:** Activity Audit Logs have been upgraded using cryptographic immutability (WORM-like). Each log entry computes a SHA-256 hash sealing its timestamp, payload, and the explicit hash of the *previous* log entry, creating a blockchain-like structure that instantly invalidates manual tampering.
+### Audit Trail
+- Every state-changing operation (user/patient/appointment/consultation/invoice create/update/delete, payment events) is recorded via `appendAuditLog()`.
+- Audit entries are created **server-side only** — the `POST /api/audit_logs` endpoint has been removed to prevent clients from forging entries.
+- Each entry includes a SHA-256 hash of the previous entry (hash chain) for tamper-evidence.
+- Audit logs are admin-only read.
 
-### Product & UX Reliability Polish (Phase 2)
-1. **Robust Notification Engine:** Replaced legacy, synchronous `window.alert()` calls (which pause JS execution and leak native browser styling) with asynchronous, accessible toast notifications utilizing `sonner`. This improves non-blocking flow and standardizes error awareness.
-2. **Advanced Search Pipeline:** Built a debounced global search architecture indexing both Patients and Appointments simultaneously, preventing UI saturation and unnecessary re-renders while optimizing query processing limits.
-3. **Data Visualization:** Integrated `recharts` for rich, interactive, dynamic area-chart visualization tracking historical appointments vs newly registered patients, optimizing macro-management workflows.
-4. **Accessibility (a11y) Improvements:** Improved `aria-label` tags, refined visual hierarchy inputs, and fortified interactive fields with direct keyboard support (e.g. `Escape` key logic for exiting search contexts).
-5. **Role-Contextual Session Timeouts (Inactivity Guard):** Implemented an intelligent client-side idle timeout mechanism. To balance security with clinical operational reality, the platform automatically logs out administrative/secretary roles after `15 minutes` of inactivity (reducing exposure risk in open-office environments), while doctors are granted a `30-minute` idle window to accommodate longer patient consultations without disruptive re-authentication flows.
+### Payment Security
+- **HMAC-SHA256 webhook verification** with constant-time comparison (`crypto.timingSafeEqual`).
+- **Idempotency**: replayed webhooks are detected and skipped.
+- **Timeout** (10s) on gateway requests to prevent slow-loris abuse.
+- **Host Header Injection fix**: `responseUrl` and `cancellationUrl` use `FRONTEND_URL` env var instead of `req.get('host')`.
 
-| Financial Intelligence | Role-Based Access Control (RBAC) |
-| :---: | :---: |
-| ![Finances](public/Screenshots/4.png) | ![RBAC](public/Screenshots/5.png) |
+### AI / LLM Safety
+- **PHI stripping** before sending data to Google Gemini (configurable via `LLM_PHI_MODE` env var):
+  - `strip` (default): replace PHI fields with placeholders (`[PATIENT_NAME]`, `[PATIENT_ID]`, etc.)
+  - `redact`: mask PHI partially (`J*** D**`)
+  - `passthrough`: send PHI as-is (**requires signed BAA with Google**)
+- The `GEMINI_API_KEY` is read server-side only — it is **never** exposed to the client bundle (the previous `vite.config.ts` `define` directive that leaked it has been removed).
 
-### Required Hardening for Production (HIPAA / GDPR Target)
-While the boilerplate provides a strong foundation and robust application-layer security, the following **infrastructure** level configurations must be resolved before deploying natively to edge clusters or cloud providers:
+### HTTP Security Headers
+- **Content Security Policy** with explicit directives (production: strict, dev: permissive for Vite HMR).
+- **HSTS** (1 year, includeSubDomains, preload).
+- **COOP**, **CORP**, **Referrer-Policy: strict-origin-when-cross-origin**.
+- `frame-ancestors: 'none'` (clickjacking mitigation).
 
-1. **Dynamic Secrets Management:** Move away from local `.env` variables into enterprise secret vaults (AWS Secrets Manager, HashiCorp Vault) with automated rotation policies.
-2. **Database Cloud Encryption-at-Rest:** Ensure operational disks are encrypted (AES-256) at the infrastructure level natively via the DB provider (e.g. AWS KMS).
+### Rate Limiting
+- Global: 500 requests / 15 min per IP.
+- Auth: 20 login attempts / 15 min per IP.
+
+### Body Size Limit
+- `express.json` with `limit: '1mb'` to mitigate payload-based DoS.
+
+---
+
+## Required Hardening for Production (HIPAA / GDPR)
+
+Before deploying with real PHI:
+
+1. **Secrets Management**: Move `JWT_SECRET`, `ENCRYPTION_KEY`, `PAYMENT_WEBHOOK_SECRET` from `.env` to a secret vault (AWS Secrets Manager, HashiCorp Vault).
+2. **Database Encryption at Rest**: Enable at the infrastructure level (AWS KMS, GCP CMEK).
+3. **BAA with Google**: Required before using Gemini with PHI. Without a BAA, keep `LLM_PHI_MODE=strip`.
+4. **TLS Termination**: Ensure HTTPS only at the load balancer / reverse proxy layer. Add HTTP→HTTPS redirect.
+5. **Backup Strategy**: Encrypted backups with tested restore procedures. Define retention policy (HIPAA: 6 years minimum).
+6. **Formal Risk Assessment**: Required by HIPAA Security Rule (45 CFR §164.308).
+7. **Workforce Training**: HIPAA-required security awareness training for all users.
+8. **Incident Response Plan**: Document breach notification procedures (60-day notification window per HITECH).
 
 ---
 
 ## Project Structure
 
-This project follows a scalable Full-Stack architecture pattern, combining an Express backend and a React frontend into a cohesive monolith optimized for deployment.
-
 ```text
-├── server.ts              # Express Backend Entry Point & Secured API Routes
-├── vite.config.ts         # Vite Configuration (Frontend bundling)
-├── .env.example           # Example environment variables
-├── package.json           # Project metadata and dependencies
-├── src/
-│   ├── App.tsx            # Main React Application, State Management & Role Routing
-│   ├── main.tsx           # React DOM rendering entry point
-│   ├── theme.ts           # Global UI color palette and styling variables
-│   ├── components/        # Reusable UI Components & Role-based Views
-│   │   ├── AIChat.tsx     # AI Chat Assistant Component
-│   │   ├── Ico.tsx        # Centralized Iconography (Lucide-React)
-│   │   └── ...            # Detailed clinical UI components
-│   └── lib/               # Core Utilities and Business Logic
-│       ├── api.ts         # Frontend HTTP Client (Fetch wrapper + CSRF & Cookies handling)
-│       ├── ai-service.ts  # Integration with Google Gemini / AI models
-│       ├── env.server.js  # Environment variables runtime Zod validation
-│       └── swagger.js     # OpenAPI/Swagger documentation configuration
+.
+├── server.ts                  # Express backend (auth, RBAC, IDOR guards, audit, encryption)
+├── schema.sql                 # PostgreSQL schema with RLS (for production DB mode)
+├── Dockerfile                 # Multi-stage, non-root, slim
+├── docker-compose.yml         # postgres + app with healthchecks and required secrets
+├── .env.example               # Template with generation instructions
+├── package.json
+├── tsconfig.json              # Strict mode enabled
+├── vite.config.ts             # Vite + proxy (no client-side secrets)
+├── .github/workflows/
+│   ├── ci.yml                 # typecheck + test + build + npm audit
+│   └── deploy.yml             # SSH deploy (gated, commented by default)
+├── public/
+│   └── Screenshots/           # README images
+└── src/
+    ├── App.tsx                # React app, routing, role-based views, session timeout
+    ├── main.tsx
+    ├── theme.ts
+    ├── index.css
+    ├── components/            # 19 view components
+    │   ├── AIChat.tsx
+    │   ├── AIScribe.tsx
+    │   ├── AdminUsersView.tsx
+    │   ├── AgendaView.tsx / SecAgendaView.tsx
+    │   ├── AuditView.tsx
+    │   ├── ConsultationView.tsx
+    │   ├── DashboardView.tsx / SecDashboardView.tsx
+    │   ├── FinanceView.tsx
+    │   ├── MedicalHistoryView.tsx
+    │   ├── PatientDetailView.tsx
+    │   ├── PatientsView.tsx / SecPatientsView.tsx
+    │   ├── SettingsView.tsx
+    │   └── ...
+    └── lib/
+        ├── api.ts             # Frontend HTTP client with dynamic CSRF token
+        ├── ai-service.ts      # Gemini integration with PHI sanitization
+        ├── env.server.ts      # Zod-validated env vars (no defaults for secrets)
+        ├── swagger.ts
+        ├── types.ts
+        ├── validators.ts
+        ├── cie10.ts           # ICD-10 catalog (ES)
+        └── medications.ts
 ```
 
 ---
 
 ## Tech Stack
 
-*   **Frontend:** [React 19](https://react.dev/), [Vite](https://vitejs.dev/), [Tailwind CSS](https://tailwindcss.com/)
-*   **Logic:** [TypeScript](https://www.typescriptlang.org/) (Strict Mode)
-*   **Animations:** [Motion](https://motion.dev/)
-*   **Backend:** [Node.js](https://nodejs.org/) & [Express](https://expressjs.com/)
-*   **Database:** [PostgreSQL](https://www.postgresql.org/)
-*   **AI Engine:** [Google Gemini Pro API](https://ai.google.dev/) & [Ollama](https://ollama.com/)
+- **Frontend**: [React 19](https://react.dev/), [Vite 6](https://vitejs.dev/), [Tailwind CSS 4](https://tailwindcss.com/)
+- **Language**: [TypeScript 5.8](https://www.typescriptlang.org/) (strict mode)
+- **Animations**: [Motion](https://motion.dev/)
+- **Backend**: [Node.js 20](https://nodejs.org/), [Express 4](https://expressjs.com/)
+- **Database**: [PostgreSQL 15](https://www.postgresql.org/) (with in-memory mock fallback for dev)
+- **AI Engine**: [Google Gemini](https://ai.google.dev/) (with PHI sanitization)
+- **Testing**: [Vitest](https://vitest.dev/) + [Supertest](https://github.com/ladjs/supertest)
+- **Security**: [Helmet](https://helmetjs.github.io/), [express-rate-limit](https://github.com/express-rate-limit/express-rate-limit), [bcryptjs](https://github.com/dcodeIO/bcrypt.js), [jsonwebtoken](https://github.com/auth0/node-jsonwebtoken), [zod](https://zod.dev/)
 
 ---
 
-### Database Architecture & In-Memory Mocking
+## Database Architecture
 
-For maximum portability and ease of testing, this MVP currently utilizes an **In-Memory Mock Database** directly managed within `server.ts`. This allows you to clone the repository and run the application instantly without configuring a local Postgres instance.
+The boilerplate ships with two database modes:
 
-*   **Synthetic Data Generation:** Administrators can utilize the "Populate with Test Data" button within the Settings panel to rapidly inject synthetic patients, scheduled appointments, and clinical histories. **Important:** All synthetic data and mock profiles generated (names, ID numbers, clinical notes) are completely fictitious and generated randomly. They do not correlate to any real persons or actual patient records and are strictly for testing purposes. To maintain testing hygiene, this volatile test data is automatically purged upon admin logout.
-*   **Production SQL Ready:** The backend API surface is fully demarcated to seamlessly swap the in-memory arrays for actual database transactions. A complete `schema.sql` file is included in the project root to initialize your production PostgreSQL instance when you are ready to scale.
+### 1. In-Memory Mock (default, for development)
+- 8 arrays (`mockUsers`, `mockPatients`, `mockConsultations`, etc.) managed in `server.ts`.
+- Allows instant setup without a Postgres instance.
+- Use the "Populate with Test Data" button in Settings to generate synthetic patients, appointments, and consultations.
+- **Volatile test data is purged on admin logout.**
+
+### 2. PostgreSQL (for production)
+- `schema.sql` declares the full schema with:
+  - UUID primary keys (`uuid-ossp` extension)
+  - Row-Level Security (RLS) policies with `WITH CHECK` for INSERT/UPDATE
+  - ENUM types for roles and statuses
+  - Foreign keys with explicit `ON DELETE` actions
+  - Indexes on foreign keys and `clinic_id` for multi-tenant query performance
+- When PostgreSQL is available (`PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` set), `initDb()` connects and creates the `users` and `clinics` tables. To enable the full schema, run `psql -f schema.sql` against your database.
+
+> **Note**: The mock arrays and the SQL schema currently diverge in column types. The encryption format produces hex strings of 60-100+ characters, so `VARCHAR(20)` columns in `schema.sql` for `identification_number` / `phone` must be widened to `TEXT` or `VARCHAR(255)` before deploying with real DB mode. See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for migration instructions.
 
 ---
 
 ## Quick Start
 
-### 1. Installation
+### 1. Clone & Install
 ```bash
 git clone https://github.com/frangelbarrera/medical-saas-fullstack-boilerplate.git
 cd medical-saas-fullstack-boilerplate
 npm install
 ```
 
-### 2. Configuration
-Create a `.env` file in the root directory:
-```env
-# Server Config
-NODE_ENV=development
-JWT_SECRET=your_high_entropy_secret_at_least_16_chars
-ENCRYPTION_KEY=a_32_byte_hex_string_for_aes_256
+### 2. Generate Secrets
+The app will refuse to start without valid secrets. Generate them with `openssl`:
 
-# PostgreSQL
-PGHOST=localhost
-PGPORT=5432
-PGUSER=your_user
-PGPASSWORD=your_password
-PGDATABASE=medical_saas_db
+```bash
+# JWT_SECRET (min 32 chars, recommend 64 hex chars = 32 bytes)
+openssl rand -hex 32
 
-# External Payment Gateway
-PAYMENT_GATEWAY_TOKEN=your_token
-PAYMENT_GATEWAY_URL=https://api.gateway.com/prepare
+# ENCRYPTION_KEY (exactly 64 hex chars = 32 bytes for AES-256)
+openssl rand -hex 32
 
-# AI (Optional for Cloud)
-GEMINI_API_KEY=your_google_api_key
+# PAYMENT_WEBHOOK_SECRET (min 16 chars)
+openssl rand -hex 16
 ```
 
-### 3. Execution
+### 3. Configure `.env`
 ```bash
-# Develop
+cp .env.example .env
+# Edit .env and replace all placeholders with real values
+```
+
+Required variables (no defaults — the app crashes if missing):
+- `JWT_SECRET` — min 32 characters
+- `ENCRYPTION_KEY` — exactly 64 hex characters (32 bytes)
+- `PAYMENT_WEBHOOK_SECRET` — min 16 characters
+- `FRONTEND_URL` — your frontend origin (for CORS and redirects)
+
+Optional:
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` — first admin credentials (if not set, no admin is seeded; you must provision one)
+- `GEMINI_API_KEY` — for AI features (server-side only)
+- `PAYMENT_GATEWAY_TOKEN` — for real payment integration
+- `LLM_PHI_MODE` — `strip` (default) | `redact` | `passthrough` (BAA required)
+
+### 4. Run
+```bash
+# Development (Vite HMR + tsx watch)
 npm run dev
 
-# Build for Production
+# Production
 npm run build
 npm start
 ```
 
-### 4. Default Credentials (Demo Access)
-Upon initialization, the database automatically seeds the following credentials for immediate evaluation. **Important:** Change these passwords immediately in a production environment via the Admin Settings panel.
+### 5. First Login
+If you set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env`, log in with those credentials. Change the password immediately via the Admin Settings panel.
 
-| Role | Username | Password | Access Level |
-| :--- | :--- | :--- | :--- |
-| **Administrator** | `admin` | `admin` | Full system access, audit logs, finances, and user management. |
-| **Doctor** | `doctor` | `admin` | Clinical view, AI Scribe, patient consultations, and medical records. |
-| **Secretary** | `secretary` | `admin` | Agenda management, patient intake, triage statuses, and billing. |
-
-**DISCLAIMER / PROFESSIONAL WARNING:**
-
-This project is an educational boilerplate and Minimum Viable Product (MVP). It is **NOT** intended for immediate production use with real Protected Health Information (PHI) out of the box. While application-level security features and encryption algorithms are structurally implemented, deploying this to a live environment requires extensive infrastructure-level hardening. This includes database encryption-at-rest natively on the provider (e.g., AWS KMS), professional secrets management, and certified HIPAA / GDPR compliance audits. The authors and contributors are not liable for any data breaches or non-compliance resulting from the unmodified deployment of this software.
+If you did **not** set those env vars, no admin is seeded. Set them and restart the server to provision the first admin.
 
 ---
 
-## Documentation & CI/CD
+## Testing
 
-### API Documentation (Swagger)
-The platform includes built-in **Swagger/OpenAPI** documentation for developers. Once the server is running, you can access the interactive documentation at:
-`http://localhost:3000/api-docs`
+```bash
+# Run all tests once
+npm test
 
-### CI/CD Workflow
-We use **GitHub Actions** for continuous integration. Every commit is automatically validated through:
-1.  **TypeScript Compilation**: Checks for type safety errors.
-2.  **Linting**: Ensures adherence to enterprise code standards.
-3.  **Production Build**: Verifies that the application compiles correctly for deployment.
+# Watch mode
+npm run test:watch
+
+# With coverage
+npm run test:ci
+```
+
+Tests use Vitest + Supertest. The suite covers:
+- Auth (login success/failure, JWT verification, role enforcement)
+- IDOR (cross-clinic access returns 404)
+- Encryption (round-trip, auth tag failure throws)
+- CSRF (state-changing requests without token are rejected)
+- Payment webhook (signature verification, idempotency)
+
+---
+
+## CI/CD
+
+Every push to `main` and every PR triggers `.github/workflows/ci.yml`:
+1. **Typecheck** (`tsc --noEmit` with strict mode)
+2. **Tests** (`vitest run` with test secrets)
+3. **Build** (`vite build`)
+4. **Security audit** (`npm audit --audit-level=high`, no `continue-on-error`)
+
+Deploy workflow (`.github/workflows/deploy.yml`) is provided as a template — configure `SERVER_HOST`, `SERVER_USER`, `SERVER_SSH_KEY`, and `DEPLOY_PATH` secrets to enable SSH-based deployment.
 
 ---
 
 ## Security
 
-For detailed information on our security approach and how to report vulnerabilities, please refer to our [SECURITY.md](SECURITY.md) file.
+For the security policy and vulnerability reporting, see [SECURITY.md](SECURITY.md).
 
 ---
 
-## Future Roadmap
+## Roadmap
 
-*   **Local Sovereign AI:** Native deep integration with **Whisper** (Local Speech-to-Text) and **Llama 3** (via Ollama) to eliminate external API dependencies.
-*   **DICOM Integration:** Support for medical imaging visualization (X-Rays, MRIs) directly in the patient timeline.
-*   **HL7/FHIR Compliance:** Standardization for interoperability with other hospital systems.
+- **Local Sovereign AI**: Whisper + Llama 3 via Ollama for fully offline AI.
+- **DICOM Integration**: Medical imaging in the patient timeline.
+- **HL7/FHIR**: Interoperability with hospital systems.
+- **Database migration tooling**: Replace mock arrays with real PostgreSQL queries, aligned with `schema.sql`.
+- **Code-splitting**: Lazy-load view components to reduce initial bundle.
 
 ---
 
 ## License
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 Developed by **Frangel Barrera** (Cybersecurity Engineer).
