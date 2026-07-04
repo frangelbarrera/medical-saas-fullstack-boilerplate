@@ -96,60 +96,17 @@ const pool = new Pool({
 const JWT_SECRET = env.JWT_SECRET;
 
 // --- Mock Database ---
-let mockUsers: any[] = [
-  {
-    id: "admin_root",
-    username: "admin",
-    password: bcrypt.hashSync("admin", 10),
-    name: "Enterprise Admin",
-    role: "ADMIN",
-    clinic_id: "clinic_001",
-    is_active: true,
-    managed_doctor_ids: []
-  },
-  {
-    id: "doc_house",
-    username: "doctor",
-    password: bcrypt.hashSync("admin", 10),
-    name: "Dr. Gregory House",
-    role: "DOCTOR",
-    clinic_id: "clinic_001",
-    is_active: true,
-    managed_doctor_ids: []
-  },
-  {
-    id: "sec_claire",
-    username: "secretary",
-    password: bcrypt.hashSync("admin", 10),
-    name: "Secretary Claire",
-    role: "SECRETARY",
-    clinic_id: "clinic_001",
-    is_active: true,
-    managed_doctor_ids: ["doc_house"]
-  }
-];
+// Demo users are NOT seeded here. The first admin is provisioned by the setup
+// script (scripts/init-admin.ts) or by initDb() reading ADMIN_USERNAME /
+// ADMIN_PASSWORD from env vars. This prevents credentials like "admin/admin"
+// from being committed to source control.
+let mockUsers: any[] = [];
 
-let mockClinics: any[] = [
-  {
-    id: "clinic_001",
-    name: "SaaS Medical Hub",
-    owner_id: "admin_root",
-    address: "Medical Center Plaza, Suite 100",
-    phone: "0999999999",
-    email: "hub@medical.com",
-    logo: ""
-  }
-];
+let mockClinics: any[] = [];
 
-let mockPatients: any[] = [
-  { id: "pat_1", name: "John Doe", dni: encryptPHI("1712345678"), email: encryptPHI("john@test.com"), phone: encryptPHI("0987654321"), birth_date: encryptPHI("1990-05-15"), gender: "M", status: "Active", clinic_id: "clinic_001", doctorId: "doc_house", doctorName: "Dr. Gregory House" },
-  { id: "pat_2", name: "Jane Smith", dni: encryptPHI("1787654321"), email: encryptPHI("jane@test.com"), phone: encryptPHI("0912345678"), birth_date: encryptPHI("1985-10-20"), gender: "F", status: "Active", clinic_id: "clinic_001", doctorId: "doc_house", doctorName: "Dr. Gregory House" }
-];
+let mockPatients: any[] = [];
 
-let mockInvoices: any[] = [
-  { id: "inv_1", clinic_id: "clinic_001", patient_id: "pat_1", patient_name: "John Doe", doctor_id: "doc_house", doctor_name: "Dr. Gregory House", concept: "General Consultation", amount: 45.0, payment_method: "Cash", status: "Paid", date: new Date().toISOString() },
-  { id: "inv_2", clinic_id: "clinic_001", patient_id: "pat_2", patient_name: "Jane Smith", doctor_id: "doc_house", doctor_name: "Dr. Gregory House", concept: "Ultrasound", amount: 80.0, payment_method: "Insurance", status: "Pending", insurance_company: "Humana", date: new Date().toISOString() }
-];
+let mockInvoices: any[] = [];
 
 let mockExpenses: any[] = [];
 let mockAuditLogs: any[] = [];
@@ -159,15 +116,16 @@ let mockAiChats: any[] = [];
 
 let dbAvailable = false;
 
-// Initialize Database Schema
+// Initialize Database Schema and seed first admin from env vars.
+// NEVER hardcode credentials. The first admin's password comes from ADMIN_PASSWORD
+// env var (or a random one is generated and logged once if ADMIN_PASSWORD_AUTO=true).
 async function initDb() {
   let client;
   try {
-    // Acquire a connection from the pool with a short timeout
     client = await pool.connect();
     dbAvailable = true;
-    console.log("✅ Connected to PostgreSQL successfully.");
-    
+    console.log("[db] Connected to PostgreSQL successfully.");
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -177,7 +135,8 @@ async function initDb() {
         role TEXT,
         clinic_id TEXT,
         is_active BOOLEAN DEFAULT TRUE,
-        managed_doctor_ids JSONB DEFAULT '[]'
+        managed_doctor_ids JSONB DEFAULT '[]',
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
 
       CREATE TABLE IF NOT EXISTS clinics (
@@ -192,33 +151,34 @@ async function initDb() {
       );
     `);
 
-    // Seed Admin User
-    const adminRes = await client.query("SELECT * FROM users WHERE username = $1", ["admin"]);
-    if (adminRes.rows.length === 0) {
-      const hashedPassword = bcrypt.hashSync("admin", 10);
-      const clinicId = "clinic_001";
-      
-      await client.query("INSERT INTO clinics (id, name, owner_id) VALUES ($1, $2, $3)", [
-        clinicId, "Central Test Clinic", "admin_root"
-      ]);
+    // Seed first admin only if ADMIN_USERNAME / ADMIN_PASSWORD env vars are provided.
+    const adminUsername = process.env.ADMIN_USERNAME;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    const adminName = process.env.ADMIN_NAME || "System Administrator";
+    const clinicId = process.env.ADMIN_CLINIC_ID || "clinic_default";
+    const clinicName = process.env.ADMIN_CLINIC_NAME || "Default Clinic";
 
-      await client.query("INSERT INTO users (id, username, password, name, role, clinic_id) VALUES ($1, $2, $3, $4, $5, $6)", [
-        "admin_root", "admin", hashedPassword, "Root Administrator", "ADMIN", clinicId
-      ]);
-      
-      await client.query("INSERT INTO users (id, username, password, name, role, clinic_id) VALUES ($1, $2, $3, $4, $5, $6)", [
-        "doc_house", "doctor", hashedPassword, "Dr. Gregory House", "DOCTOR", clinicId
-      ]);
-      
-      await client.query("INSERT INTO users (id, username, password, name, role, clinic_id, managed_doctor_ids) VALUES ($1, $2, $3, $4, $5, $6, $7)", [
-        "sec_claire", "secretary", hashedPassword, "Secretary Claire", "SECRETARY", clinicId, JSON.stringify(["doc_house"])
-      ]);
-
-      console.log("👤 Demo users seeded: admin, doctor, secretary (Password: admin)");
+    if (adminUsername && adminPassword) {
+      const adminRes = await client.query("SELECT * FROM users WHERE username = $1", [adminUsername]);
+      if (adminRes.rows.length === 0) {
+        const hashedPassword = bcrypt.hashSync(adminPassword, 12);
+        await client.query(
+          "INSERT INTO clinics (id, name, owner_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+          [clinicId, clinicName, "admin_root"]
+        );
+        await client.query(
+          "INSERT INTO users (id, username, password, name, role, clinic_id) VALUES ($1, $2, $3, $4, $5, $6)",
+          ["admin_root", adminUsername, hashedPassword, adminName, "ADMIN", clinicId]
+        );
+        console.log(`[db] Initial admin '${adminUsername}' provisioned. Change the password immediately after first login.`);
+      }
+    } else {
+      console.warn("[db] ADMIN_USERNAME / ADMIN_PASSWORD not set. No initial admin seeded.");
+      console.warn("[db] To create the first admin, set ADMIN_USERNAME and ADMIN_PASSWORD env vars and restart.");
     }
   } catch (err) {
     dbAvailable = false;
-    console.warn("⚠️ PostgreSQL not available. Running in mock mode.");
+    console.warn("[db] PostgreSQL not available. Running in mock mode.");
   } finally {
     if (client) client.release();
   }
@@ -237,6 +197,26 @@ const authenticateToken = (req: any, res: any, next: any) => {
     req.user = user;
     next();
   });
+};
+
+// RBAC middleware. Usage: app.post('/api/users', authenticateToken, requireRole('ADMIN'), handler)
+// Returns 403 if the authenticated user's role is not in the allowed list.
+const requireRole = (...allowedRoles: string[]) => {
+  return (req: any, res: any, next: any) => {
+    if (!req.user || !req.user.role) {
+      return res.status(403).json({ error: "Forbidden: missing role in token" });
+    }
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: `Forbidden: requires one of [${allowedRoles.join(', ')}]` });
+    }
+    next();
+  };
+};
+
+// Multi-tenant isolation helper. Throws 404 if the resource does not belong to
+// the authenticated user's clinic. We return 404 (not 403) to avoid leaking existence.
+const assertClinicOwnership = (resourceClinicId: string, userClinicId: string) => {
+  return resourceClinicId === userClinicId;
 };
 
 const app = express();
@@ -324,7 +304,7 @@ async function startServer() {
       username: z.string().min(3).max(50),
       password: z.string().min(5).max(100),
       role: z.string(),
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
     }),
     userUpdate: z.object({
       name: z.string().optional(),
@@ -340,7 +320,7 @@ async function startServer() {
       birthDate: z.string(),
       gender: z.string(),
       status: z.string(),
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
     }),
     patientUpdate: z.object({
       name: z.string().optional(),
@@ -358,7 +338,7 @@ async function startServer() {
       duration: z.number().int().positive(),
       reason: z.string().optional().or(z.literal('')),
       dateTime: z.string(),
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
       doctorId: z.string(),
       doctorName: z.string(),
     }),
@@ -373,14 +353,14 @@ async function startServer() {
       status: z.string(),
       insuranceCompany: z.string().optional().or(z.literal('')),
       date: z.string(),
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
     }),
     expenseCreate: z.object({
       concept: z.string(),
       category: z.string(),
       amount: z.number().nonnegative(),
       date: z.string(),
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
       registeredBy: z.string(),
     }),
     consultationCreate: z.object({
@@ -390,12 +370,12 @@ async function startServer() {
       vital_signs: z.record(z.string(), z.any()).optional(),
       diagnosis_cie10: z.array(z.any()).optional(),
       prescription: z.array(z.any()).optional(),
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
       doctorId: z.string(),
       doctorName: z.string(),
     }),
     auditLogCreate: z.object({
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
       userId: z.string(),
       userName: z.string(),
       action: z.string(),
@@ -405,7 +385,7 @@ async function startServer() {
     }),
     aiChatCreate: z.object({
       userId: z.string(),
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
       title: z.string(),
       messages: z.array(z.any()),
     }),
@@ -417,7 +397,7 @@ async function startServer() {
       invoiceId: z.string(),
       amount: z.number().positive(),
       patientName: z.string(),
-      clinicId: z.string(),
+      clinicId: z.string().optional(), // ignored, taken from JWT
     })
   };
 
@@ -542,10 +522,10 @@ async function startServer() {
     }
   });
 
-  // Populate Database
-  app.post("/api/admin/populate", authenticateToken, (req: any, res: any) => {
-    const { clinicId } = req.body;
-    if (!clinicId) return res.status(400).json({ error: "clinicId is required" });
+  // Populate Database (admin only)
+  app.post("/api/admin/populate", authenticateToken, requireRole('ADMIN'), (req: any, res: any) => {
+    // Use clinicId from JWT, ignore any clinicId in body (IDOR fix)
+    const clinicId = req.user.clinicId;
 
     const numPatients = 10;
     const firstNames = ["James", "Maria", "Robert", "Linda", "Michael", "Patricia", "William", "Barbara", "David", "Susan", "Thomas", "Jessica", "Sarah", "Karen", "Nancy", "Lisa"];
@@ -652,62 +632,106 @@ async function startServer() {
     }
   });
 
-  // Users
-  app.get("/api/users", authenticateToken, async (req, res) => {
-    const { clinicId, role } = req.query;
+  // Users (admin only for write operations; admin+doctor+secretary for read)
+  app.get("/api/users", authenticateToken, requireRole('ADMIN', 'DOCTOR', 'SECRETARY'), async (req: any, res) => {
+    // clinicId from JWT, ignore query param (IDOR fix)
+    const clinicId = req.user.clinicId;
+    const role = req.query.role;
     try {
       let filtered = mockUsers.filter(u => u.clinic_id === clinicId);
       if (role) {
         filtered = filtered.filter(u => u.role === role);
       }
+      // Whitelist fields: never expose password hash
       res.json(filtered.map((u: any) => ({
-        ...u,
+        id: u.id,
+        username: u.username,
+        name: u.name,
+        role: u.role,
         clinicId: u.clinic_id,
         isActive: u.is_active,
         managedDoctorIds: u.managed_doctor_ids
       })));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.post("/api/users", authenticateToken, validateBody(schemas.userCreate), async (req: any, res: any) => {
-    const id = "user_" + Math.random().toString(36).substr(2, 9);
-    const { name, username, password, role, clinicId } = req.body;
-    const hashedPassword = bcrypt.hashSync(password, 10);
+  app.post("/api/users", authenticateToken, requireRole('ADMIN'), validateBody(schemas.userCreate), async (req: any, res: any) => {
+    const id = "user_" + crypto.randomUUID();
+    const { name, username, password, role } = req.body;
+    // Enforce clinicId from JWT (IDOR fix) and restrict assign roles
+    const clinicId = req.user.clinicId;
+    // Only ADMIN can create ADMIN; SECRETARY/DOCTOR creation is allowed to ADMIN
+    const allowedRoles = ['ADMIN', 'DOCTOR', 'SECRETARY'];
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ error: `Invalid role. Allowed: ${allowedRoles.join(', ')}` });
+    }
+    const hashedPassword = bcrypt.hashSync(password, 12);
     
     try {
       const newUser = { id, username, password: hashedPassword, name, role, clinic_id: clinicId, is_active: true, managed_doctor_ids: [] };
       mockUsers.push(newUser);
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "USER_CREATE", target: id, type: "SECURITY",
+        details: { username, role }
+      });
       res.json({ id, name, role, clinicId });
     } catch (error: any) {
-      console.error("Error creating user:", error);
       res.status(500).json({ error: "Error saving user to database" });
     }
   });
 
-  app.put("/api/users/:id", authenticateToken, validateBody(schemas.userUpdate), async (req, res) => {
+  app.put("/api/users/:id", authenticateToken, requireRole('ADMIN'), validateBody(schemas.userUpdate), async (req: any, res) => {
     const { name, role, isActive, managedDoctorIds } = req.body;
     try {
       const idx = mockUsers.findIndex(u => u.id === req.params.id);
-      if (idx !== -1) {
-        if (name !== undefined) mockUsers[idx].name = name;
-        if (role !== undefined) mockUsers[idx].role = role;
-        if (isActive !== undefined) mockUsers[idx].is_active = isActive;
-        if (managedDoctorIds !== undefined) mockUsers[idx].managed_doctor_ids = managedDoctorIds;
+      if (idx === -1) return res.status(404).json({ error: "User not found" });
+      // IDOR fix: cannot modify users outside own clinic
+      if (!assertClinicOwnership(mockUsers[idx].clinic_id, req.user.clinicId)) {
+        return res.status(404).json({ error: "User not found" });
       }
+      // Self-protection: cannot deactivate or de-role yourself
+      if (req.params.id === req.user.id && (isActive === false || (role && role !== req.user.role))) {
+        return res.status(400).json({ error: "Cannot change your own role or deactivate yourself" });
+      }
+      if (name !== undefined) mockUsers[idx].name = name;
+      if (role !== undefined) mockUsers[idx].role = role;
+      if (isActive !== undefined) mockUsers[idx].is_active = isActive;
+      if (managedDoctorIds !== undefined) mockUsers[idx].managed_doctor_ids = managedDoctorIds;
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: req.user.clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "USER_UPDATE", target: req.params.id, type: "SECURITY",
+        details: { name, role, isActive, managedDoctorIds }
+      });
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.delete("/api/users/:id", authenticateToken, async (req, res) => {
+  app.delete("/api/users/:id", authenticateToken, requireRole('ADMIN'), async (req: any, res) => {
     try {
+      // Self-protection: cannot delete yourself
+      if (req.params.id === req.user.id) {
+        return res.status(400).json({ error: "Cannot delete your own account" });
+      }
+      const idx = mockUsers.findIndex(u => u.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "User not found" });
+      // IDOR fix: cannot delete users outside own clinic
+      if (!assertClinicOwnership(mockUsers[idx].clinic_id, req.user.clinicId)) {
+        return res.status(404).json({ error: "User not found" });
+      }
       mockUsers = mockUsers.filter(u => u.id !== req.params.id);
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: req.user.clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "USER_DELETE", target: req.params.id, type: "SECURITY",
+        details: {}
+      });
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -730,8 +754,10 @@ async function startServer() {
    *       200:
    *         description: List of patients
    */
-  app.get("/api/patients", authenticateToken, async (req, res) => {
-    const { clinicId, doctorId } = req.query;
+  app.get("/api/patients", authenticateToken, async (req: any, res) => {
+    // IDOR fix: clinicId from JWT, ignore query param
+    const clinicId = req.user.clinicId;
+    const doctorId = req.query.doctorId;
     try {
       let filtered = mockPatients.filter(p => p.clinic_id === clinicId);
       
@@ -745,18 +771,18 @@ async function startServer() {
         email: decryptPHI(p.email),
         phone: decryptPHI(p.phone),
         clinicId: p.clinic_id,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
         birthDate: decryptPHI(p.birth_date)
       })));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.post("/api/patients", authenticateToken, validateBody(schemas.patientCreate), async (req, res) => {
-    const id = "pat_" + Math.random().toString(36).substr(2, 9);
-    const { name, dni, email, phone, birthDate, gender, status, clinicId } = req.body;
+  app.post("/api/patients", authenticateToken, validateBody(schemas.patientCreate), async (req: any, res) => {
+    const id = "pat_" + crypto.randomUUID();
+    const { name, dni, email, phone, birthDate, gender, status } = req.body;
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     
     try {
       const newPat = { 
@@ -771,37 +797,48 @@ async function startServer() {
         clinic_id: clinicId 
       };
       mockPatients.push(newPat);
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "PATIENT_CREATE", target: id, type: "PHI",
+        details: { name }
+      });
       res.json({ 
         ...newPat, 
-        dni, // Send decrypted back to client immediately
+        dni,
         email,
         phone,
         clinicId: newPat.clinic_id, 
-        createdAt: new Date().toISOString(), 
-        updatedAt: new Date().toISOString(),
         birthDate
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.put("/api/patients/:id", authenticateToken, validateBody(schemas.patientUpdate), async (req, res) => {
+  app.put("/api/patients/:id", authenticateToken, validateBody(schemas.patientUpdate), async (req: any, res) => {
     const { name, dni, email, phone, birthDate, gender, status } = req.body;
     try {
       const idx = mockPatients.findIndex(p => p.id === req.params.id);
-      if (idx !== -1) {
-        mockPatients[idx] = { 
-          ...mockPatients[idx], 
-          name: name || mockPatients[idx].name, 
-          dni: dni ? encryptPHI(dni) : mockPatients[idx].dni, 
-          email: email !== undefined ? encryptPHI(email) : mockPatients[idx].email, 
-          phone: phone !== undefined ? encryptPHI(phone) : mockPatients[idx].phone, 
-          birth_date: birthDate ? encryptPHI(birthDate) : mockPatients[idx].birth_date, 
-          gender: gender || mockPatients[idx].gender, 
-          status: status || mockPatients[idx].status 
-        };
+      if (idx === -1) return res.status(404).json({ error: "Patient not found" });
+      // IDOR fix: cannot modify patients outside own clinic
+      if (!assertClinicOwnership(mockPatients[idx].clinic_id, req.user.clinicId)) {
+        return res.status(404).json({ error: "Patient not found" });
       }
+      mockPatients[idx] = { 
+        ...mockPatients[idx], 
+        name: name || mockPatients[idx].name, 
+        dni: dni ? encryptPHI(dni) : mockPatients[idx].dni, 
+        email: email !== undefined ? encryptPHI(email) : mockPatients[idx].email, 
+        phone: phone !== undefined ? encryptPHI(phone) : mockPatients[idx].phone, 
+        birth_date: birthDate ? encryptPHI(birthDate) : mockPatients[idx].birth_date, 
+        gender: gender || mockPatients[idx].gender, 
+        status: status || mockPatients[idx].status 
+      };
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: req.user.clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "PATIENT_UPDATE", target: req.params.id, type: "PHI",
+        details: { name, gender, status }
+      });
       res.json({
         ...mockPatients[idx],
         dni: decryptPHI(mockPatients[idx].dni),
@@ -810,41 +847,55 @@ async function startServer() {
         birthDate: decryptPHI(mockPatients[idx].birth_date),
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.delete("/api/patients/:id", authenticateToken, async (req, res) => {
+  app.delete("/api/patients/:id", authenticateToken, async (req: any, res) => {
     try {
+      const idx = mockPatients.findIndex(p => p.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "Patient not found" });
+      // IDOR fix: cannot delete patients outside own clinic
+      if (!assertClinicOwnership(mockPatients[idx].clinic_id, req.user.clinicId)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
       mockPatients = mockPatients.filter(p => p.id !== req.params.id);
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: req.user.clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "PATIENT_DELETE", target: req.params.id, type: "PHI",
+        details: {}
+      });
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.get("/api/patients/:id", authenticateToken, async (req, res) => {
+  app.get("/api/patients/:id", authenticateToken, async (req: any, res) => {
     try {
       const p = mockPatients.find(p => p.id === req.params.id);
       if (!p) return res.status(404).json({ error: "Patient not found" });
+      // IDOR fix: cannot read patients outside own clinic
+      if (!assertClinicOwnership(p.clinic_id, req.user.clinicId)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
       res.json({
         ...p,
         dni: decryptPHI(p.dni),
         email: decryptPHI(p.email),
         phone: decryptPHI(p.phone),
         clinicId: p.clinic_id,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
         birthDate: decryptPHI(p.birth_date)
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   // Stats
-  app.get("/api/stats", authenticateToken, async (req, res) => {
-    const { clinicId } = req.query;
+  app.get("/api/stats", authenticateToken, async (req: any, res) => {
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     try {
       const pCount = mockPatients.filter(p => p.clinic_id === clinicId).length;
       const cCount = mockConsultations.filter(c => c.clinic_id === clinicId).length;
@@ -855,91 +906,105 @@ async function startServer() {
         alerts: 0
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  // Audit Logs
+  // Audit Logs (admin-only read; clients cannot write audit logs anymore)
   /**
    * @openapi
    * /api/audit_logs:
    *   get:
-   *     summary: Retrieve clinical audit logs
+   *     summary: Retrieve clinical audit logs (admin only)
    *     tags: [Audit]
    *     security:
    *       - bearerAuth: []
-   *     parameters:
-   *       - in: query
-   *         name: clinicId
-   *         required: true
-   *         schema:
-   *           type: string
    *     responses:
    *       200:
-   *         description: List of audit logs
+   *         description: List of audit logs for the caller's clinic
    */
-  app.get("/api/audit_logs", authenticateToken, async (req, res) => {
-    const { clinicId } = req.query;
+  app.get("/api/audit_logs", authenticateToken, requireRole('ADMIN'), async (req: any, res) => {
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     try {
-      const filtered = mockAuditLogs.filter(l => l.clinic_id === clinicId).slice(-20).reverse();
+      const filtered = mockAuditLogs.filter(l => l.clinic_id === clinicId).slice(-50).reverse();
       res.json(filtered);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.post("/api/audit_logs", authenticateToken, validateBody(schemas.auditLogCreate), async (req, res) => {
-    const id = "log_" + Math.random().toString(36).substr(2, 9);
-    const { clinicId, userId, userName, action, target, type, details } = req.body;
-    
-    try {
-      appendAuditLog(mockAuditLogs, { id, clinic_id: clinicId, user_id: userId, user_name: userName, action, target, type, details });
-      res.json({ id });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  // NOTE: POST /api/audit_logs has been intentionally removed.
+  // Audit entries are now created server-side by appendAuditLog() from inside
+  // privileged handlers. Allowing clients to write their own audit entries
+  // destroyed the integrity of the audit trail (HIPAA violation).
 
   // Appointments
-  app.get("/api/appointments", authenticateToken, async (req, res) => {
-    const { clinicId, doctorId, start, end } = req.query;
+  app.get("/api/appointments", authenticateToken, async (req: any, res) => {
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
+    const doctorId = req.query.doctorId;
+    const start = req.query.start;
+    const end = req.query.end;
     try {
       const filtered = mockAppointments.filter(a => {
         const matchClinic = a.clinic_id === clinicId;
         const matchDoctor = !doctorId || a.doctor_id === doctorId;
-        return matchClinic && matchDoctor;
+        const apptDate = new Date(a.date_time);
+        const matchStart = !start || apptDate >= new Date(start as string);
+        const matchEnd = !end || apptDate <= new Date(end as string);
+        return matchClinic && matchDoctor && matchStart && matchEnd;
       });
       res.json(filtered);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.post("/api/appointments", authenticateToken, validateBody(schemas.appointmentCreate), async (req, res) => {
-    const id = "appt_" + Math.random().toString(36).substr(2, 9);
-    const { patientName, patientId, type, duration, reason, dateTime, clinicId, doctorId, doctorName } = req.body;
+  app.post("/api/appointments", authenticateToken, validateBody(schemas.appointmentCreate), async (req: any, res) => {
+    const id = "appt_" + crypto.randomUUID();
+    const { patientName, patientId, type, duration, reason, dateTime, doctorId, doctorName } = req.body;
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     
     try {
       const newAppt = { id, patient_name: patientName, patient_id: patientId, type, duration, reason, date_time: dateTime, clinic_id: clinicId, doctor_id: doctorId, doctor_name: doctorName, created_at: new Date().toISOString() };
       mockAppointments.push(newAppt);
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "APPOINTMENT_CREATE", target: id, type: "SCHEDULE",
+        details: { patientId, doctorId, dateTime }
+      });
       res.json(newAppt);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.delete("/api/appointments/:id", authenticateToken, async (req, res) => {
+  app.delete("/api/appointments/:id", authenticateToken, async (req: any, res) => {
     try {
+      const idx = mockAppointments.findIndex(a => a.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "Appointment not found" });
+      // IDOR fix
+      if (!assertClinicOwnership(mockAppointments[idx].clinic_id, req.user.clinicId)) {
+        return res.status(404).json({ error: "Appointment not found" });
+      }
       mockAppointments = mockAppointments.filter(a => a.id !== req.params.id);
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: req.user.clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "APPOINTMENT_DELETE", target: req.params.id, type: "SCHEDULE",
+        details: {}
+      });
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   // Invoices
-  app.get("/api/invoices", authenticateToken, async (req, res) => {
-    const { clinicId } = req.query;
+  app.get("/api/invoices", authenticateToken, async (req: any, res) => {
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     try {
       const filtered = mockInvoices.filter(i => i.clinic_id === clinicId);
       res.json(filtered.map(i => ({
@@ -954,17 +1019,24 @@ async function startServer() {
         createdAt: i.date
       })));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.post("/api/invoices", authenticateToken, validateBody(schemas.invoiceCreate), async (req, res) => {
-    const id = "inv_" + Math.random().toString(36).substr(2, 9);
-    const { patientId, patientName, doctorId, doctorName, concept, amount, paymentMethod, status, insuranceCompany, date, clinicId } = req.body;
+  app.post("/api/invoices", authenticateToken, validateBody(schemas.invoiceCreate), async (req: any, res) => {
+    const id = "inv_" + crypto.randomUUID();
+    const { patientId, patientName, doctorId, doctorName, concept, amount, paymentMethod, status, insuranceCompany, date } = req.body;
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     
     try {
       const newInv = { id, patient_id: patientId, patient_name: patientName, doctor_id: doctorId, doctor_name: doctorName, concept, amount, payment_method: paymentMethod, status, insurance_company: insuranceCompany, date, clinic_id: clinicId };
       mockInvoices.push(newInv);
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "INVOICE_CREATE", target: id, type: "FINANCE",
+        details: { patientId, amount, paymentMethod }
+      });
       res.json({
         ...newInv,
         clinicId: newInv.clinic_id,
@@ -974,105 +1046,141 @@ async function startServer() {
         doctorName: newInv.doctor_name,
         paymentMethod: newInv.payment_method,
         insuranceCompany: newInv.insurance_company,
-        createdAt: new Date().toISOString()
+        createdAt: newInv.date
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   // Expenses
-  app.get("/api/expenses", authenticateToken, async (req, res) => {
-    const { clinicId } = req.query;
+  app.get("/api/expenses", authenticateToken, async (req: any, res) => {
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     try {
       const filtered = mockExpenses.filter(e => e.clinic_id === clinicId);
       res.json(filtered);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.post("/api/expenses", authenticateToken, validateBody(schemas.expenseCreate), async (req, res) => {
-    const id = "exp_" + Math.random().toString(36).substr(2, 9);
-    const { concept, category, amount, date, clinicId, registeredBy } = req.body;
+  app.post("/api/expenses", authenticateToken, validateBody(schemas.expenseCreate), async (req: any, res) => {
+    const id = "exp_" + crypto.randomUUID();
+    const { concept, category, amount, date, registeredBy } = req.body;
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     
     try {
       const newExp = { id, concept, category, amount, date, clinic_id: clinicId, registered_by: registeredBy, created_at: new Date().toISOString() };
       mockExpenses.push(newExp);
       res.json(newExp);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   // Consultations
-  app.get("/api/patients/:id/consultations", authenticateToken, async (req, res) => {
+  app.get("/api/patients/:id/consultations", authenticateToken, async (req: any, res) => {
     try {
+      // IDOR fix: verify patient belongs to caller's clinic before returning consultations
+      const patient = mockPatients.find(p => p.id === req.params.id);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+      if (!assertClinicOwnership(patient.clinic_id, req.user.clinicId)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
       const filtered = mockConsultations.filter(c => c.patient_id === req.params.id);
       res.json(filtered);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.post("/api/patients/:id/consultations", authenticateToken, validateBody(schemas.consultationCreate), async (req, res) => {
-    const id = "cons_" + Math.random().toString(36).substr(2, 9);
-    const { date, reason, evolution, vital_signs, diagnosis_cie10, prescription, clinicId, doctorId, doctorName } = req.body;
+  app.post("/api/patients/:id/consultations", authenticateToken, requireRole('ADMIN', 'DOCTOR'), validateBody(schemas.consultationCreate), async (req: any, res) => {
+    const id = "cons_" + crypto.randomUUID();
+    const { date, reason, evolution, vital_signs, diagnosis_cie10, prescription, doctorId, doctorName } = req.body;
+    // IDOR fix: clinicId from JWT
+    const clinicId = req.user.clinicId;
     
     try {
+      // Verify patient belongs to caller's clinic
+      const patient = mockPatients.find(p => p.id === req.params.id);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+      if (!assertClinicOwnership(patient.clinic_id, clinicId)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
       const newCons = { id, patient_id: req.params.id, date, reason, evolution, vital_signs, diagnosis_cie10, prescription, clinic_id: clinicId, doctor_id: doctorId, doctor_name: doctorName };
       mockConsultations.push(newCons);
+      appendAuditLog(mockAuditLogs, {
+        id: "log_" + crypto.randomUUID(), clinic_id: clinicId, user_id: req.user.id, user_name: req.user.name,
+        action: "CONSULTATION_CREATE", target: id, type: "PHI",
+        details: { patientId: req.params.id, diagnosis: diagnosis_cie10 }
+      });
       res.json(newCons);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   // AI Chats
-  app.get("/api/ai_chats", authenticateToken, async (req, res) => {
-    const { clinicId, userId } = req.query;
+  app.get("/api/ai_chats", authenticateToken, async (req: any, res) => {
+    // IDOR fix: clinicId and userId from JWT
+    const clinicId = req.user.clinicId;
+    const userId = req.user.id;
     try {
       const filtered = mockAiChats.filter(c => c.clinic_id === clinicId && c.user_id === userId);
       res.json(filtered);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.post("/api/ai_chats", authenticateToken, validateBody(schemas.aiChatCreate), async (req, res) => {
-    const id = "chat_" + Math.random().toString(36).substr(2, 9);
-    const { userId, clinicId, title, messages } = req.body;
+  app.post("/api/ai_chats", authenticateToken, validateBody(schemas.aiChatCreate), async (req: any, res) => {
+    const id = "chat_" + crypto.randomUUID();
+    const { title, messages } = req.body;
+    // IDOR fix: clinicId and userId from JWT
+    const clinicId = req.user.clinicId;
+    const userId = req.user.id;
     
     try {
       const newChat = { id, user_id: userId, clinic_id: clinicId, title, messages, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       mockAiChats.push(newChat);
       res.json(newChat);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.put("/api/ai_chats/:id", authenticateToken, validateBody(schemas.aiChatUpdate), async (req, res) => {
+  app.put("/api/ai_chats/:id", authenticateToken, validateBody(schemas.aiChatUpdate), async (req: any, res) => {
     const { title, messages } = req.body;
     try {
       const idx = mockAiChats.findIndex(c => c.id === req.params.id);
-      if (idx !== -1) {
-        if (title !== undefined) mockAiChats[idx].title = title;
-        if (messages !== undefined) mockAiChats[idx].messages = messages;
-        mockAiChats[idx].updated_at = new Date().toISOString();
+      if (idx === -1) return res.status(404).json({ error: "Chat not found" });
+      // IDOR fix
+      if (!assertClinicOwnership(mockAiChats[idx].clinic_id, req.user.clinicId) || mockAiChats[idx].user_id !== req.user.id) {
+        return res.status(404).json({ error: "Chat not found" });
       }
+      if (title !== undefined) mockAiChats[idx].title = title;
+      if (messages !== undefined) mockAiChats[idx].messages = messages;
+      mockAiChats[idx].updated_at = new Date().toISOString();
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.delete("/api/ai_chats/:id", authenticateToken, async (req, res) => {
+  app.delete("/api/ai_chats/:id", authenticateToken, async (req: any, res) => {
     try {
+      const idx = mockAiChats.findIndex(c => c.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "Chat not found" });
+      // IDOR fix
+      if (!assertClinicOwnership(mockAiChats[idx].clinic_id, req.user.clinicId) || mockAiChats[idx].user_id !== req.user.id) {
+        return res.status(404).json({ error: "Chat not found" });
+      }
       mockAiChats = mockAiChats.filter(c => c.id !== req.params.id);
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
