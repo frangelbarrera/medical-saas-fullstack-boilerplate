@@ -12,6 +12,17 @@ export const adminRouter = Router();
 adminRouter.post("/api/admin/populate", authenticateToken, requireRole("ADMIN"), (req: AuthenticatedRequest, res) => {
   const clinicId = req.user!.clinicId; // IDOR fix: from JWT
 
+  // SECURITY: cap the total number of patients per clinic to prevent OOM via
+  // repeated populate calls. 1000 is generous for a boilerplate; production
+  // should raise this or remove the endpoint entirely.
+  const MAX_PATIENTS_PER_CLINIC = 1000;
+  const existingCount = mockPatients.filter((p) => p.clinic_id === clinicId).length;
+  if (existingCount >= MAX_PATIENTS_PER_CLINIC) {
+    return res.status(429).json({
+      error: `Cannot populate: clinic already has ${existingCount} patients (max ${MAX_PATIENTS_PER_CLINIC}). Delete test data before populating again.`,
+    });
+  }
+
   const numPatients = 10;
   const firstNames = [
     "James",

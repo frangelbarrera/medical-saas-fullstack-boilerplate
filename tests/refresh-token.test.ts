@@ -51,13 +51,35 @@ describe("Refresh token service", () => {
       // Issue a new token, rotating from the old one
       const raw2 = issueRefreshToken("user_2", "clinic_1", hash1);
 
-      // Old token should now be revoked
-      expect(validateRefreshToken(raw1)).toBeNull();
-
-      // New token should be valid
+      // New token should be valid immediately after rotation (before any
+      // revoked token is presented, which would trigger family revocation).
       const record2 = validateRefreshToken(raw2);
       expect(record2).not.toBeNull();
       expect(record2!.userId).toBe("user_2");
+
+      // After validating raw2 (which marks it as still active), raw1 is
+      // already revoked by the rotation. But presenting raw1 now would
+      // trigger family revocation (see next test). We just verify raw1
+      // is no longer the active token by checking that raw2 replaced it.
+      // We cannot call validateRefreshToken(raw1) here because that would
+      // trigger reuse detection and revoke raw2.
+    });
+
+    it("should revoke the entire family when a revoked token is presented (reuse detection)", () => {
+      // Scenario: attacker stole raw1 (already rotated to raw2 by legitimate user).
+      // Attacker presents raw1 -> server detects reuse -> revokes raw2 as well.
+      const raw1 = issueRefreshToken("user_reuse", "clinic_1");
+      const hash1 = _hashTokenForTesting(raw1);
+      const raw2 = issueRefreshToken("user_reuse", "clinic_1", hash1);
+
+      // raw2 is valid before the attacker presents raw1
+      expect(validateRefreshToken(raw2)).not.toBeNull();
+
+      // Attacker presents the old (revoked) raw1 -> triggers family revocation
+      expect(validateRefreshToken(raw1)).toBeNull();
+
+      // Now raw2 is also revoked (reuse detection)
+      expect(validateRefreshToken(raw2)).toBeNull();
     });
   });
 

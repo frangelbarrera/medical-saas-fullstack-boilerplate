@@ -99,14 +99,31 @@ export const issueRefreshToken = (userId: string, clinicId: string, oldTokenHash
 /**
  * Validate a refresh token: must exist, not be revoked, not be expired.
  * Returns the record if valid, null otherwise.
+ *
+ * SECURITY (reuse detection): if a revoked token is presented, this indicates
+ * the token was stolen (the legitimate user already rotated past it). Per
+ * OAuth 2.0 BCP, we revoke ALL tokens for that user to force re-login and
+ * limit the attacker's window. The legitimate user will need to re-authenticate,
+ * which is the safe default.
  */
 export const validateRefreshToken = (rawToken: string): RefreshTokenRecord | null => {
   if (!rawToken) return null;
   const tokenHash = sha256(rawToken);
   const record = refreshTokens.find((r) => r.token === tokenHash);
   if (!record) return null;
-  if (record.revoked) return null;
   if (record.expiresAt < new Date()) return null;
+
+  if (record.revoked) {
+    // Reuse detection: a revoked token was presented. Revoke ALL tokens for
+    // this user to invalidate any stolen tokens in the family.
+    // This is a defensive measure — the legitimate user will need to re-login.
+    for (const r of refreshTokens) {
+      if (r.userId === record.userId) {
+        r.revoked = true;
+      }
+    }
+    return null;
+  }
   return record;
 };
 
