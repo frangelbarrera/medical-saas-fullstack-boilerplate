@@ -44,7 +44,12 @@ help downstream users understand what was hardened.
 
 6. **__Host- cookie prefix bypassed by fallback**: `authenticateToken`
    fell back to the non-prefixed `token` cookie, allowing session fixation
-   via subdomain cookie injection. Fallback removed in production.
+   via subdomain cookie injection. Fallback is now gated by `!useHostPrefix`:
+   in production+HTTPS only `__Host-token` is accepted; the `token` fallback
+   is permitted only in dev/HTTP mode (preserving Vercel/HTTP-deploy
+   compatibility from commit 0994435 without re-opening the CWE-384 vector).
+   A static regression test in `tests/cookie-fixation-regression.test.ts`
+   prevents re-introduction of the unconditional fallback.
    CWE-384, CWE-1004.
 
 ### HIGH bugs fixed in v1.2

@@ -20,14 +20,26 @@ export interface AuthenticatedRequest extends Request {
 export const authenticateToken = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   // Read session cookie. The cookie name depends on whether the request is
   // HTTPS and production: __Host-token (prod + HTTPS) or token (dev/HTTP).
-  // We check both names to handle transitions between environments.
+  //
+  // SECURITY: In production with HTTPS (useHostPrefix=true), we ONLY accept
+  // the __Host-token cookie. We do NOT fall back to the non-prefixed `token`
+  // cookie, because an attacker controlling any subdomain (e.g. evil.example.com)
+  // could inject a `token` cookie scoped to the parent domain that would be
+  // sent along with the legitimate __Host-token, allowing session fixation
+  // (CWE-384). The __Host- prefix prevents this because it forbids the
+  // `Domain` attribute and requires `Secure` + `Path=/`.
+  //
+  // The fallback to `token` is ONLY allowed when we are not in the
+  // __Host- configuration (i.e. dev mode or HTTP without TLS termination).
+  // This preserves the Vercel/HTTP-deploy compatibility fix from 0994435
+  // without re-opening the session-fixation vector in production.
   const isProd = env.NODE_ENV === "production";
   const isSecure = isRequestSecure(req);
   const useHostPrefix = isProd && isSecure;
   const cookieName = useHostPrefix ? "__Host-token" : "token";
   const token =
     req.cookies?.[cookieName] ||
-    req.cookies?.token || // fallback for dev/HTTP
+    (!useHostPrefix ? req.cookies?.token : undefined) || // dev/HTTP fallback only
     (req.headers["authorization"] && req.headers["authorization"].split(" ")[1]);
 
   if (!token) return res.sendStatus(401);
