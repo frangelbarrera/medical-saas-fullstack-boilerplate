@@ -187,6 +187,79 @@ help downstream users understand what was hardened.
   family), but a true atomic compare-and-set requires DB transaction
   support (future work). CWE-362.
 
+## Known issues (unpatched runtime vulnerabilities)
+
+As of the last `npm audit` run, three HIGH-severity advisories remain
+unpatched in runtime dependencies. They are documented here for
+transparency. None of them are exploitable from an unauthenticated
+client in the default deployment, but they should not be left
+unpatched indefinitely. The fix requires a major-version bump of the
+direct runtime dependencies involved, which is a breaking change and
+is deferred to a dedicated hardening sprint with full end-to-end
+testing. See the related GitHub issue for tracking.
+
+### HIGH: `ip-address` <= 10.3.0 (transitive via `express-rate-limit`)
+
+- Advisories:
+  - GHSA-mwp4-54f8-5fhr (leading-zero octet decoding -> SSRF / trust-boundary bypass)
+  - GHSA-4xrf-jv44-h6hh (CIDR suffix suppresses special-use classification)
+  - GHSA-22jq-vg5j-6vgg (IPv4-mapped / NAT64 IPv6 misclassification)
+- Where it lands: `express-rate-limit@^8.5.1` -> `ip-address@10.2.0`.
+- Why unpatched: bumping `express-rate-limit` from v8 to v7 is a breaking
+  API change (rate-limit API and store interface were renamed). Requires
+  rewriting `authLimiter` and the global limiter in `server.ts` and
+  re-running the rate-limit regression tests.
+- Accepted risk: `express-rate-limit` uses `ip-address` only to normalize
+  client IPs for the per-IP bucket. The boilerplate sits behind a
+  trusted proxy (`app.set('trust proxy', 1)`), so attacker-controlled
+  IPs are constrained by the proxy's own validation. Affects
+  availability (a crafted `X-Forwarded-For` could in theory dodge the
+  login brute-force limiter), not confidentiality or integrity.
+
+### HIGH: `browserslist` <= 4.28.6 (transitive via `@vitejs/plugin-react`)
+
+- Advisories:
+  - GHSA-c83g-rgw3-j3cx (unbounded memory growth via distinct query results -> OOM)
+  - GHSA-73wf-gq98-2v4g (uncaught crash via custom `browserslist-stats.json`)
+- Where it lands: `@vitejs/plugin-react@^5.0.4` -> `@babel/core` ->
+  `@babel/helper-compilation-targets` -> `browserslist@4.28.4`.
+- Why unpatched: bumping `@vitejs/plugin-react` from v5 to v6 requires
+  Vite 7+ which in turn requires Node 22+ and has breaking plugin
+  config changes. Requires a full build-matrix regression run.
+- Accepted risk: `browserslist` only runs at build time (Vite/Babel
+  transform), never in the runtime Node process serving clients. An
+  attacker would need write access to the build environment's
+  `browserslist-stats.json` to trigger the crash, which is equivalent
+  to already being compromised.
+
+### HIGH: `js-yaml` 4.0.0 - 4.3.1 (transitive via `swagger-jsdoc`)
+
+- Advisories:
+  - GHSA-5p4m-2wfm-xmqj (quadratic CPU in `!!omap` resolution)
+  - GHSA-2883-xcg3-v3hh (`maxTotalMergeKeys` does not limit empty merge sources)
+- Where it lands: `swagger-jsdoc@^6.2.8` -> `swagger-parser` ->
+  `@apidevtools/json-schema-ref-parser` -> `js-yaml@4.3.0`.
+  (Also reachable from `eslint@^9.15.0` via `@eslint/eslintrc`, but that
+  path is dev-only.)
+- Why unpatched: bumping `swagger-jsdoc` from v6 to v10+ requires
+  migrating the OpenAPI spec constructor from the v6 CommonJS signature
+  to the v10 ESM signature, and re-validating the generated
+  `/api-docs` output. Not a one-line bump.
+- Accepted risk: `swagger-jsdoc` is loaded lazily and only when
+  `NODE_ENV !== 'production'` (the `/api-docs` route is gated to
+  non-production). The production runtime does not parse attacker-supplied
+  YAML, so the quadratic-CPU path is not reachable by external inputs in
+  the default deployment.
+
+### Tracking
+
+These three are tracked in a single GitHub issue (link to be added when
+the issue is created). Resolution target: October 2026. The fix
+strategy is to bump the direct runtime parents (`express-rate-limit`,
+`@vitejs/plugin-react`, `swagger-jsdoc`) rather than patch the
+transitive packages individually, since `npm audit fix --force` would
+apply breaking changes blindly without the required API migration.
+
 ## Reporting a Vulnerability
 
 **Do not open public GitHub issues for security vulnerabilities.** Instead:
