@@ -1,0 +1,955 @@
+// Prisma schema for Medical SaaS Boilerplate (v2 neutral data model).
+//
+// The schema is jurisdiction-neutral: it avoids region-specific fields
+// (national tax IDs, local payment gateways) in favour of typed identifiers,
+// configurable payers and clinic-level locale/currency settings.
+//
+// Multi-tenant isolation is enforced in two layers:
+//  1. Application layer: every repository call runs inside a transaction
+//     that sets `app.current_clinic_id` (see services/data/src/tenant.ts).
+//  2. Database layer: row-level security policies on every tenant table
+//     (see migrations — the runtime role `medical_app` cannot bypass them).
+//
+// PHI field-level encryption: columns ending in `Enc` store AES-256-GCM
+// ciphertext ('iv:authTag:ciphertext' hex). Columns ending in `Hmac` store a
+// deterministic HMAC-SHA256 of the plaintext, computed with PHI_HMAC_KEY, and
+// are used for exact-match search without decrypting the directory.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum UserRole {
+  ADMIN
+  DOCTOR
+  SECRETARY
+  PATIENT
+}
+
+enum PatientStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum PatientIdentifierType {
+  INTERNAL
+  PASSPORT
+  NATIONAL_ID
+  INSURANCE
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  CHECKED_IN
+  IN_PROGRESS
+  COMPLETED
+  NO_SHOW
+  CANCELLED
+}
+
+enum AppointmentType {
+  NEW_PATIENT
+  FOLLOW_UP
+  ANNUAL_CHECKUP
+  PROCEDURE
+  OTHER
+}
+
+enum EncounterStatus {
+  DRAFT
+  IN_REVIEW
+  SIGNED
+  AMENDED
+}
+
+enum CodingSystem {
+  ICD_10
+  SNOMED_CT
+  LOINC
+}
+
+enum ProblemStatus {
+  ACTIVE
+  RESOLVED
+  ARCHIVED
+}
+
+enum AllergySeverity {
+  MILD
+  MODERATE
+  SEVERE
+}
+
+enum AllergyStatus {
+  ACTIVE
+  INACTIVE
+  NO_KNOWN
+}
+
+enum MedicationOrderStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  INSURANCE
+  OTHER
+}
+
+enum WebhookEventStatus {
+  PROCESSED
+  REJECTED
+  DUPLICATE
+}
+
+enum ThreadCategory {
+  PATIENT
+  CARE_TEAM
+  INTERNAL
+  SYSTEM
+}
+
+enum DsarType {
+  ACCESS
+  EXPORT
+  RECTIFICATION
+  OBJECTION
+  RESTRICTION
+}
+
+enum DsarStatus {
+  OPEN
+  IN_PROGRESS
+  FULFILLED
+  REJECTED
+}
+
+enum ConsentType {
+  TREATMENT
+  DATA_SHARING
+  AI_PROCESSING
+  COMMUNICATION
+}
+
+enum ConsentStatus {
+  GRANTED
+  REFUSED
+  EXPIRED
+}
+
+enum AiDraftType {
+  SCRIBE_NOTE
+  CHAT_REPLY
+}
+
+enum AiReviewState {
+  PENDING
+  INSERTED
+  DISCARDED
+}
+
+enum ObservationType {
+  PULSE
+  TEMPERATURE
+  BP_SYSTOLIC
+  BP_DIASTOLIC
+  WEIGHT
+  HEIGHT
+  BMI
+  CUSTOM
+}
+
+// ==========================================
+// TENANCY
+// ==========================================
+
+model Clinic {
+  id             String   @id @default(uuid())
+  name           String
+  address        String?
+  phone          String?
+  email          String?
+  locale         String   @default("en-CH")
+  timezone       String   @default("Europe/Zurich")
+  currency       String   @default("CHF")
+  retentionYears Int      @default(20) @map("retention_years")
+  ownerId        String?  @map("owner_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  users            User[]
+  patients         Patient[]
+  payers           Payer[]
+  appointments     Appointment[]
+  encounters       Encounter[]
+  observations     Observation[]
+  problems         Problem[]
+  allergies        Allergy[]
+  medicationOrders MedicationOrder[]
+  invoices         Invoice[]
+  payments         Payment[]
+  expenses         Expense[]
+  auditLogs        AuditLog[]
+  threads          Thread[]
+  dsarRequests     DsarRequest[]
+  aiConversations  AiConversation[]
+  aiDrafts         AiDraft[]
+  promptTemplates  PromptTemplate[]
+  notifications    Notification[]
+  availabilityRules AvailabilityRule[]
+  breakGlassAccesses BreakGlassAccess[]
+
+  @@map("clinics")
+}
+
+/// Staff user or patient-portal identity. `patientId` links a PATIENT-role
+/// login to a single patient record (portal access is always self-scoped).
+model User {
+  id           String    @id @default(uuid())
+  clinicId     String    @map("clinic_id")
+  username     String    @unique
+  passwordHash String    @map("password_hash")
+  fullName     String    @map("full_name")
+  role         UserRole  @default(SECRETARY)
+  isActive     Boolean   @default(true) @map("is_active")
+  patientId    String?   @unique @map("patient_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  clinic            Clinic             @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient           Patient?           @relation("PatientPortalUser", fields: [patientId], references: [id], onDelete: SetNull)
+  primaryPatients   Patient[]          @relation("PatientPrimaryDoctor")
+  appointments      Appointment[]      @relation("AppointmentDoctor")
+  encounters        Encounter[]        @relation("EncounterDoctor")
+  signedEncounters  Encounter[]        @relation("EncounterSigner")
+  encounterVersions EncounterVersion[]
+  observations      Observation[]      @relation("ObservationAuthor")
+  problems          Problem[]          @relation("ProblemAuthor")
+  allergies         Allergy[]          @relation("AllergyAuthor")
+  medicationOrders  MedicationOrder[]  @relation("MedicationAuthor")
+  recordedPayments  Payment[]          @relation("PaymentRegistrar")
+  recordedExpenses  Expense[]          @relation("ExpenseRegistrar")
+  sessions          Session[]
+  threads           Thread[]           @relation("ThreadCreator")
+  threadParticipants ThreadParticipant[]
+  messages          Message[]
+  dsarRequests      DsarRequest[]      @relation("DsarRequester")
+  aiConversations   AiConversation[]
+  aiDrafts          AiDraft[]          @relation("AiDraftAuthor")
+  reviewedDrafts    AiDraft[]          @relation("AiDraftReviewer")
+  notifications     Notification[]
+  availabilityRules AvailabilityRule[]
+  breakGlassAccesses BreakGlassAccess[]
+
+  @@index([clinicId])
+  @@map("users")
+}
+
+// ==========================================
+// PATIENTS
+// ==========================================
+
+model Patient {
+  id          String        @id @default(uuid())
+  clinicId    String        @map("clinic_id")
+  internalRef String        @map("internal_ref") // human-readable internal ID (P-XXXXXX)
+  fullName    String        @map("full_name") // not encrypted: needed for search/list
+  birthDateEnc String?      @map("birth_date_enc") // AES-256-GCM ciphertext (ISO date)
+  birthYear   Int?          @map("birth_year") // plaintext year only, for list views
+  sex         String?
+  phoneEnc    String?       @map("phone_enc") // AES-256-GCM ciphertext
+  phoneHmac   String?       @map("phone_hmac") // HMAC index for exact search
+  emailEnc    String?       @map("email_enc") // AES-256-GCM ciphertext
+  emailHmac   String?       @map("email_hmac") // HMAC index for exact search
+  addressEnc  String?       @map("address_enc") // AES-256-GCM ciphertext
+  status      PatientStatus @default(ACTIVE)
+  primaryDoctorId String?   @map("primary_doctor_id")
+  defaultPayerId  String?   @map("default_payer_id")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  clinic            Clinic               @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  primaryDoctor     User?                @relation("PatientPrimaryDoctor", fields: [primaryDoctorId], references: [id], onDelete: SetNull)
+  defaultPayer      Payer?               @relation("PatientDefaultPayer", fields: [defaultPayerId], references: [id], onDelete: SetNull)
+  identifiers       PatientIdentifier[]
+  consents          PatientConsent[]
+  portalUsers       User[]               @relation("PatientPortalUser")
+  appointments      Appointment[]
+  encounters        Encounter[]
+  observations      Observation[]
+  problems          Problem[]
+  allergies         Allergy[]
+  medicationOrders  MedicationOrder[]
+  invoices          Invoice[]
+  threads           Thread[]
+  dsarRequests      DsarRequest[]
+  aiDrafts          AiDraft[]
+  breakGlassAccesses BreakGlassAccess[]
+
+  @@index([clinicId])
+  @@unique([clinicId, internalRef])
+  @@index([clinicId, fullName])
+  @@index([primaryDoctorId])
+  @@map("patients")
+}
+
+/// Typed patient identifier (internal reference, passport, national ID,
+/// insurance card). `valueEnc` holds AES-256-GCM ciphertext; `valueHmac`
+/// is a deterministic search index. Jurisdiction-neutral by design.
+model PatientIdentifier {
+  id        String               @id @default(uuid())
+  clinicId  String               @map("clinic_id")
+  patientId String               @map("patient_id")
+  type      PatientIdentifierType
+  valueEnc  String               @map("value_enc")
+  valueHmac String?              @map("value_hmac")
+  isPrimary Boolean              @default(false) @map("is_primary")
+  createdAt DateTime             @default(now()) @map("created_at")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, type, valueHmac])
+  @@index([patientId])
+  @@map("patient_identifiers")
+}
+
+/// Consent register (treatment, data sharing, AI processing, communication).
+/// Consent is a first-class resource: AI features check AI_PROCESSING
+/// consent before any LLM call.
+model PatientConsent {
+  id           String       @id @default(uuid())
+  clinicId     String       @map("clinic_id")
+  patientId    String       @map("patient_id")
+  type         ConsentType
+  status       ConsentStatus
+  grantedAt    DateTime?    @map("granted_at")
+  expiresAt    DateTime?    @map("expires_at")
+  note         String?
+  recordedById String?      @map("recorded_by_id")
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, type])
+  @@index([clinicId])
+  @@map("patient_consents")
+}
+
+/// Configurable payer (insurance, private, other). Neutral by design.
+model Payer {
+  id        String   @id @default(uuid())
+  clinicId  String   @map("clinic_id")
+  name      String
+  type      String   @default("INSURANCE") // INSURANCE | PRIVATE | OTHER
+  createdAt DateTime @default(now()) @map("created_at")
+
+  clinic   Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patients Patient[] @relation("PatientDefaultPayer")
+
+  @@unique([clinicId, name])
+  @@map("payers")
+}
+
+// ==========================================
+// SCHEDULING
+// ==========================================
+
+model Appointment {
+  id         String            @id @default(uuid())
+  clinicId   String            @map("clinic_id")
+  patientId  String            @map("patient_id")
+  doctorId   String            @map("doctor_id")
+  type       AppointmentType   @default(FOLLOW_UP)
+  startTime  DateTime          @map("start_time")
+  endTime    DateTime          @map("end_time")
+  status     AppointmentStatus @default(SCHEDULED)
+  reason     String?
+  notes      String?
+  room       String?
+  createdAt  DateTime          @default(now()) @map("created_at")
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+
+  clinic     Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor     User        @relation("AppointmentDoctor", fields: [doctorId], references: [id], onDelete: Restrict)
+  encounter  Encounter?
+
+  @@index([clinicId, startTime])
+  @@index([patientId])
+  @@index([doctorId, startTime])
+  @@map("appointments")
+}
+
+/// Availability rule for self-booking (PAT-002). Minutes are measured from
+/// midnight in the clinic timezone.
+model AvailabilityRule {
+  id          String   @id @default(uuid())
+  clinicId    String   @map("clinic_id")
+  doctorId    String   @map("doctor_id")
+  weekday     Int // 0 = Sunday ... 6 = Saturday
+  startMinute Int      @map("start_minute")
+  endMinute   Int      @map("end_minute")
+  validFrom   DateTime? @map("valid_from")
+  validTo     DateTime? @map("valid_to")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor User  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, doctorId])
+  @@map("availability_rules")
+}
+
+// ==========================================
+// CLINICAL RECORD
+// ==========================================
+
+/// Encounter replaces the legacy free-form consultation. Clinical content is
+/// normalized: vitals live in Observation, diagnoses in Problem, prescriptions
+/// in MedicationOrder. The note lifecycle is a state machine:
+/// DRAFT -> IN_REVIEW -> SIGNED -> (amendment creates a new AMENDED encounter).
+model Encounter {
+  id              String          @id @default(uuid())
+  clinicId        String          @map("clinic_id")
+  patientId       String          @map("patient_id")
+  doctorId        String          @map("doctor_id")
+  appointmentId   String?         @unique @map("appointment_id")
+  title           String
+  chiefComplaint  String?         @map("chief_complaint")
+  observations    String?
+  plan            String?
+  status          EncounterStatus @default(DRAFT)
+  signedAt        DateTime?       @map("signed_at")
+  signedById      String?         @map("signed_by_id")
+  amendedFromId   String?         @map("amended_from_id")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  clinic          Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient         Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor          User             @relation("EncounterDoctor", fields: [doctorId], references: [id], onDelete: Restrict)
+  signedBy        User?            @relation("EncounterSigner", fields: [signedById], references: [id], onDelete: SetNull)
+  appointment     Appointment?     @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  versions        EncounterVersion[]
+  vitals          Observation[]
+  problems        Problem[]
+  medicationOrders MedicationOrder[]
+  aiDrafts        AiDraft[]
+
+  @@index([clinicId, patientId])
+  @@index([doctorId])
+  @@map("encounters")
+}
+
+/// Immutable version snapshot of an encounter note. Every content change
+/// creates a new version; signing freezes the current version.
+model EncounterVersion {
+  id           String   @id @default(uuid())
+  clinicId     String   @map("clinic_id")
+  encounterId  String   @map("encounter_id")
+  version      Int
+  authorId     String   @map("author_id")
+  snapshot     Json // structured snapshot validated by contracts
+  changeReason String?  @map("change_reason")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  encounter Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@unique([encounterId, version])
+  @@index([clinicId])
+  @@map("encounter_versions")
+}
+
+/// Typed clinical observation (vital signs and measurements), optionally
+/// coded with LOINC.
+model Observation {
+  id           String          @id @default(uuid())
+  clinicId     String          @map("clinic_id")
+  patientId    String          @map("patient_id")
+  encounterId  String?         @map("encounter_id")
+  type         ObservationType
+  loincCode    String?         @map("loinc_code")
+  value        String
+  unit         String?
+  effectiveAt  DateTime        @default(now()) @map("effective_at")
+  recordedById String          @map("recorded_by_id")
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encounter  Encounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  recordedBy User      @relation("ObservationAuthor", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, patientId])
+  @@map("observations")
+}
+
+/// Coded problem / diagnosis (ICD-10 or SNOMED CT), versioned by status
+/// transitions and verification.
+model Problem {
+  id           String       @id @default(uuid())
+  clinicId     String       @map("clinic_id")
+  patientId    String       @map("patient_id")
+  encounterId  String?      @map("encounter_id")
+  codingSystem CodingSystem @map("coding_system")
+  code         String
+  display      String
+  status       ProblemStatus @default(ACTIVE)
+  onsetDate    DateTime?    @map("onset_date")
+  resolvedAt   DateTime?    @map("resolved_at")
+  verifiedAt   DateTime?    @map("verified_at")
+  verifiedById String?      @map("verified_by_id")
+  notes        String?
+  recordedById String       @map("recorded_by_id")
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  clinic     Clinic     @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encounter  Encounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  recordedBy User       @relation("ProblemAuthor", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, patientId])
+  @@index([code])
+  @@map("problems")
+}
+
+model Allergy {
+  id            String          @id @default(uuid())
+  clinicId      String          @map("clinic_id")
+  patientId     String          @map("patient_id")
+  substance     String
+  category      String?
+  reaction      String?
+  severity      AllergySeverity?
+  status        AllergyStatus   @default(ACTIVE)
+  recordedById  String          @map("recorded_by_id")
+  recordedAt    DateTime        @default(now()) @map("recorded_at")
+  verifiedAt    DateTime?       @map("verified_at")
+
+  clinic     Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  recordedBy User    @relation("AllergyAuthor", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, patientId])
+  @@map("allergies")
+}
+
+/// Medication order. Orders generated from an AI draft are always created in
+/// DRAFT and require clinician review before activation (ADR-005).
+model MedicationOrder {
+  id              String                @id @default(uuid())
+  clinicId        String                @map("clinic_id")
+  patientId       String                @map("patient_id")
+  encounterId     String?               @map("encounter_id")
+  medicationName  String                @map("medication_name")
+  dose            String?
+  route           String?
+  frequency       String?
+  durationDays    Int?                   @map("duration_days")
+  instructions    String?
+  status          MedicationOrderStatus @default(DRAFT)
+  authoredById    String                @map("authored_by_id")
+  reviewedById    String?               @map("reviewed_by_id")
+  createdAt       DateTime              @default(now()) @map("created_at")
+
+  clinic     Clinic     @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encounter  Encounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  authoredBy User       @relation("MedicationAuthor", fields: [authoredById], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, patientId])
+  @@map("medication_orders")
+}
+
+/// Break-glass emergency access. Requires a reason, expires quickly, and is
+/// always audited (CLIN-003).
+model BreakGlassAccess {
+  id        String   @id @default(uuid())
+  clinicId  String   @map("clinic_id")
+  actorId   String   @map("actor_id")
+  patientId String   @map("patient_id")
+  reason    String
+  grantedAt DateTime @default(now()) @map("granted_at")
+  expiresAt DateTime @map("expires_at")
+
+  clinic  Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  actor   User    @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, actorId, expiresAt])
+  @@map("break_glass_accesses")
+}
+
+// ==========================================
+// COMMUNICATIONS
+// ==========================================
+
+model Thread {
+  id            String         @id @default(uuid())
+  clinicId      String         @map("clinic_id")
+  subject       String
+  category      ThreadCategory @default(INTERNAL)
+  patientId     String?        @map("patient_id")
+  createdById   String         @map("created_by_id")
+  lastMessageAt DateTime?      @map("last_message_at")
+  createdAt     DateTime       @default(now()) @map("created_at")
+
+  clinic       Clinic             @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient      Patient?           @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  createdBy    User               @relation("ThreadCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  participants ThreadParticipant[]
+  messages     Message[]
+
+  @@index([clinicId, lastMessageAt])
+  @@map("threads")
+}
+
+model ThreadParticipant {
+  id         String    @id @default(uuid())
+  clinicId   String    @map("clinic_id")
+  threadId   String    @map("thread_id")
+  userId     String    @map("user_id")
+  lastReadAt DateTime? @map("last_read_at")
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, userId])
+  @@index([clinicId, userId])
+  @@map("thread_participants")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  clinicId  String   @map("clinic_id")
+  threadId  String   @map("thread_id")
+  senderId  String   @map("sender_id")
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sender User   @relation(fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@index([threadId, createdAt])
+  @@map("messages")
+}
+
+model Notification {
+  id        String    @id @default(uuid())
+  clinicId  String    @map("clinic_id")
+  userId    String    @map("user_id")
+  category  String // APPOINTMENT_REMINDER | SYSTEM | DSAR_DUE | ...
+  subject   String
+  body      String
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, userId, readAt])
+  @@map("notifications")
+}
+
+// ==========================================
+// BILLING
+// ==========================================
+
+model Invoice {
+  id        String       @id @default(uuid())
+  clinicId  String       @map("clinic_id")
+  patientId String       @map("patient_id")
+  payerId   String?      @map("payer_id")
+  number    String
+  status    InvoiceStatus @default(DRAFT)
+  currency  String       @default("CHF")
+  subtotal  Decimal      @db.Decimal(12, 2)
+  taxTotal  Decimal      @default(0) @db.Decimal(12, 2) @map("tax_total")
+  total     Decimal      @db.Decimal(12, 2)
+  notes     String?
+  issuedAt  DateTime?    @map("issued_at")
+  dueAt     DateTime?    @map("due_at")
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  clinic   Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient  Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  items    InvoiceItem[]
+  payments Payment[]
+
+  @@unique([clinicId, number])
+  @@index([clinicId, patientId])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String  @id @default(uuid())
+  clinicId    String  @map("clinic_id")
+  invoiceId   String  @map("invoice_id")
+  description String
+  quantity    Decimal @default(1) @db.Decimal(10, 3)
+  unitPrice   Decimal @map("unit_price") @db.Decimal(12, 2)
+  total       Decimal @db.Decimal(12, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+model Payment {
+  id           String        @id @default(uuid())
+  clinicId     String        @map("clinic_id")
+  invoiceId    String        @map("invoice_id")
+  amount       Decimal       @db.Decimal(12, 2)
+  currency     String        @default("CHF")
+  method       PaymentMethod @default(CASH)
+  reference    String?
+  receivedAt   DateTime      @default(now()) @map("received_at")
+  recordedById String        @map("recorded_by_id")
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  clinic      Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  recordedBy  User    @relation("PaymentRegistrar", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, invoiceId])
+  @@map("payments")
+}
+
+model Expense {
+  id           String   @id @default(uuid())
+  clinicId     String   @map("clinic_id")
+  category     String
+  description  String
+  amount       Decimal  @db.Decimal(12, 2)
+  currency     String   @default("CHF")
+  incurredAt   DateTime @default(now()) @map("incurred_at")
+  recordedById String   @map("recorded_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  clinic     Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  recordedBy User   @relation("ExpenseRegistrar", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, incurredAt])
+  @@map("expenses")
+}
+
+/// Provider-neutral webhook events. Enforced idempotency: the (provider,
+/// external_id) unique constraint makes replays safe.
+model WebhookEvent {
+  id             String             @id @default(uuid())
+  provider       String
+  externalId     String             @unique @map("external_id")
+  signatureValid Boolean            @default(false) @map("signature_valid")
+  payload        Json
+  status         WebhookEventStatus
+  receivedAt     DateTime           @default(now()) @map("received_at")
+
+  @@index([provider, receivedAt])
+  @@map("webhook_events")
+}
+
+// ==========================================
+// AUTH (sessions + durable refresh tokens)
+// ==========================================
+
+model Session {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  clinicId   String    @map("clinic_id")
+  deviceLabel String?  @map("device_label")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+/// Durable refresh tokens with family-based reuse detection (SEC-004).
+/// Rotation is an atomic compare-and-set: the UPDATE only succeeds when the
+/// presented token is still the active head of its family.
+model RefreshToken {
+  id          String    @id @default(uuid())
+  familyId    String    @map("family_id")
+  userId      String    @map("user_id")
+  clinicId    String    @map("clinic_id")
+  sessionId   String    @map("session_id")
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  revokedAt   DateTime? @map("revoked_at")
+  replacedById String?  @map("replaced_by_id")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([familyId])
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ==========================================
+// AUDIT + DSAR
+// ==========================================
+
+/// Append-only, tamper-evident audit log. The runtime role has no UPDATE or
+/// DELETE privilege on this table (enforced by migration + RLS).
+model AuditLog {
+  id               String   @id @default(uuid())
+  seq              Int      @unique @default(autoincrement()) // global monotonic insertion order (per-clinic chain walk)
+  clinicId         String   @map("clinic_id")
+  actorId          String?  @map("actor_id")
+  actorRole        String?  @map("actor_role")
+  action           String // catalog code, e.g. PATIENT_CREATED
+  category         String   @default("SYSTEM") // AUTH | PHI | CLINICAL | BILLING | AI | ADMIN | EXPORT
+  subjectPatientId String?  @map("subject_patient_id")
+  target           String?
+  purpose          String?
+  requestId        String?  @map("request_id")
+  details          Json     @default("{}")
+  sourceIpHash     String?  @map("source_ip_hash")
+  prevHash         String?  @map("prev_hash")
+  hash             String
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt(sort: Desc)])
+  @@index([clinicId, action])
+  @@index([subjectPatientId])
+  @@map("audit_logs")
+}
+
+/// Data-subject access request workflow (DSAR-001).
+model DsarRequest {
+  id           String     @id @default(uuid())
+  clinicId     String     @map("clinic_id")
+  patientId    String     @map("patient_id")
+  requestedById String    @map("requested_by_id")
+  type         DsarType
+  status       DsarStatus @default(OPEN)
+  details      String?
+  dueAt        DateTime?  @map("due_at")
+  fulfilledAt  DateTime?  @map("fulfilled_at")
+  decisionNote String?    @map("decision_note")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  clinic     Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  requestedBy User   @relation("DsarRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, status])
+  @@map("dsar_requests")
+}
+
+// ==========================================
+// AI (governed drafts, never implicit clinicians)
+// ==========================================
+
+model AiConversation {
+  id        String   @id @default(uuid())
+  clinicId  String   @map("clinic_id")
+  userId    String   @map("user_id")
+  title     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  clinic   Clinic     @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages AiMessage[]
+
+  @@index([clinicId, userId])
+  @@map("ai_conversations")
+}
+
+model AiMessage {
+  id               String  @id @default(uuid())
+  clinicId         String  @map("clinic_id")
+  conversationId   String  @map("conversation_id")
+  role             String // USER | ASSISTANT
+  content          String
+  redactionApplied Boolean @default(false) @map("redaction_applied")
+  model            String?
+  promptVersion    String? @map("prompt_version")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+/// AI draft artifact (ADR-005): model output that REQUIRES clinician review
+/// before it can touch the record. Never published as a clinical order.
+model AiDraft {
+  id            String        @id @default(uuid())
+  clinicId      String        @map("clinic_id")
+  encounterId   String?       @map("encounter_id")
+  patientId     String?       @map("patient_id")
+  authorId      String        @map("author_id")
+  type          AiDraftType
+  content       Json // structured draft validated by contracts
+  model         String
+  promptVersion String        @map("prompt_version")
+  reviewState   AiReviewState @default(PENDING) @map("review_state")
+  reviewedById  String?       @map("reviewed_by_id")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  encounter  Encounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  patient    Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  author     User      @relation("AiDraftAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  reviewedBy User?     @relation("AiDraftReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, reviewState])
+  @@map("ai_drafts")
+}
+
+/// Versioned prompt registry (AI-001). Prompts are data, not code: every LLM
+/// call records the prompt name+version used, for auditability.
+model PromptTemplate {
+  id        String   @id @default(uuid())
+  clinicId  String   @map("clinic_id")
+  name      String // SCRIBE_NOTE | CHAT_ASSISTANT | ...
+  version   Int
+  purpose   String
+  template  String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([name, version])
+  @@index([clinicId, name, isActive])
+  @@map("prompt_templates")
+}

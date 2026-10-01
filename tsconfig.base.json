@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowJs": true,
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": false,
+    "baseUrl": ".",
+    "paths": {
+      "@medical/contracts": ["packages/contracts/src/index.ts"],
+      "@medical/ui": ["packages/ui/src/index.ts"],
+      "@medical/domain": ["services/domain/src/index.ts"],
+      "@medical/data": ["services/data/src/index.ts"],
+      "@medical/audit": ["services/audit/src/index.ts"],
+      "@medical/integrations": ["services/integrations/src/index.ts"],
+      "@web/*": ["apps/web/src/*"]
+    }
+  }
+}

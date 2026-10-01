@@ -1,0 +1,16 @@
+{
+  "name": "@medical/data",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@medical/contracts": "*",
+    "@medical/domain": "*",
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.2.3"
+  }
+}

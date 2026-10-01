@@ -2,23 +2,35 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 
 export default defineConfig({
-  test: {
-    environment: "node",
-    globals: true,
-    setupFiles: ["./tests/setup.ts"],
-    include: ["tests/**/*.test.ts"],
-    testTimeout: 30000,
-    hookTimeout: 30000,
-    coverage: {
-      provider: "v8",
-      reporter: ["text", "json", "html"],
-      include: ["server.ts", "src/lib/**"],
-      exclude: ["**/*.test.ts", "src/lib/cie10.ts", "src/lib/medications.ts"],
-    },
-  },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "."),
+      "@medical/contracts": path.resolve(__dirname, "packages/contracts/src/index.ts"),
+      "@medical/ui": path.resolve(__dirname, "packages/ui/src/index.ts"),
+      "@medical/domain": path.resolve(__dirname, "services/domain/src/index.ts"),
+      "@medical/data": path.resolve(__dirname, "services/data/src/index.ts"),
+      "@medical/audit": path.resolve(__dirname, "services/audit/src/index.ts"),
+      "@medical/integrations": path.resolve(__dirname, "services/integrations/src/index.ts"),
+    },
+  },
+  test: {
+    include: [
+      "packages/*/test/**/*.test.ts",
+      "services/*/test/**/*.test.ts",
+    ],
+    setupFiles: ["tests/setup.ts"],
+    env: {
+      NODE_ENV: "test",
+    },
+    coverage: {
+      reporter: ["text", "lcov"],
+      include: [
+        "packages/*/src/**",
+        "services/*/src/**",
+      ],
+      exclude: [
+        "services/data/src/seed.ts",
+        "**/*.d.ts",
+      ],
     },
   },
 });

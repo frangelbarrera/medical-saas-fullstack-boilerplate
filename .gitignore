@@ -31,9 +31,15 @@ yarn-error.log*
 
 # Prisma generated client (regenerated on npm install / prisma generate)
 # Note: we DO commit prisma/migrations/ — those are the source of truth for DB schema
-src/generated/
+# src/generated/ (client now lives in node_modules)
 
 # Playwright
 playwright-report/
 test-results/
 .playwright/
+
+# Monorepo build artifacts
+apps/web/dist/
+test-results/
+playwright-report/
+sbom.json
