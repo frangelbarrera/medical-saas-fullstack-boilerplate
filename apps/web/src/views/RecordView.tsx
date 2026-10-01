@@ -52,6 +52,7 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
   const [summary, setSummary] = useState<ClinicalSummary | null>(null);
   const [tab, setTab] = useState<RecordTab>("overview");
   const [editingEncounter, setEditingEncounter] = useState<Encounter | null>(null);
+  const [encountersKey, setEncountersKey] = useState(0);
   const [breakGlassNeeded, setBreakGlassNeeded] = useState(false);
   const [breakGlassReason, setBreakGlassReason] = useState("");
   const [failed, setFailed] = useState(false);
@@ -179,7 +180,7 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
             ) : tab === "timeline" ? (
               <TimelineTab patientId={patientId} t={t} locale={locale} />
             ) : tab === "encounters" ? (
-              <EncountersTab patientId={patientId} onEdit={setEditingEncounter} t={t} locale={locale} canSign={can("clinical:sign")} canWrite={can("clinical:write")} />
+              <EncountersTab patientId={patientId} onEdit={setEditingEncounter} t={t} locale={locale} canSign={can("clinical:sign")} canWrite={can("clinical:write")} refreshKey={encountersKey} />
             ) : tab === "problems" ? (
               <ProblemsTab patientId={patientId} t={t} />
             ) : tab === "medication" ? (
@@ -202,6 +203,7 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
           onClose={() => setEditingEncounter(null)}
           onSaved={async () => {
             setEditingEncounter(null);
+            setEncountersKey((k) => k + 1);
             await loadClinical();
           }}
         />
@@ -340,6 +342,7 @@ const EncountersTab = ({
   locale,
   canSign,
   canWrite,
+  refreshKey,
 }: {
   patientId: string;
   onEdit: (e: Encounter) => void;
@@ -347,12 +350,14 @@ const EncountersTab = ({
   locale: string;
   canSign: boolean;
   canWrite: boolean;
+  refreshKey: number;
 }) => {
   const { toast } = useToast();
   const [encounters, setEncounters] = useState<Encounter[] | null>(null);
-  useEffect(() => {
+  const load = useCallback(() => {
     api.encounters(patientId).then((r) => setEncounters(r.items)).catch(() => setEncounters([]));
   }, [patientId]);
+  useEffect(load, [load, refreshKey]);
 
   if (!encounters) return <p aria-busy="true" className="font-mono text-2xs text-ink-faint">{t("common.loading")}…</p>;
   if (encounters.length === 0) return <EmptyState title={t("record.noEncounters")} body={t("record.noEncountersBody")} />;
@@ -391,7 +396,12 @@ const EncountersTab = ({
                   className="font-mono text-2xs text-moss hover:underline"
                   onClick={(ev) => {
                     ev.stopPropagation();
-                    api.signEncounter(e.id).then(() => toast(t("record.state.SIGNED"), "success")).catch((err) => toast(err.message, "danger"));
+                    api.signEncounter(e.id)
+                      .then(() => {
+                        toast(t("record.state.SIGNED"), "success");
+                        load();
+                      })
+                      .catch((err) => toast(err.message, "danger"));
                   }}
                 >
                   {t("record.sign")}

@@ -96,10 +96,13 @@ test.describe("clinical console", () => {
     await page.getByRole("dialog").getByLabel("Name", { exact: false }).fill("E2e consultation note");
     await page.getByRole("dialog").getByLabel("Chief concern", { exact: false }).fill("E2e chief concern");
     await page.getByRole("button", { name: "Create", exact: true }).click();
-    await expect(page.getByText("E2e consultation note").first()).toBeVisible();
+    // the new encounter must appear in the table (the list refreshes after save)
+    const noteRow = page.getByRole("row", { name: /E2e consultation note/ });
+    await expect(noteRow).toBeVisible();
+    await expect(noteRow.getByText("Draft", { exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: "Sign note" }).click();
-    await expect(page.getByText("Signed", { exact: true }).first()).toBeVisible();
+    await noteRow.getByRole("button", { name: "Sign note" }).click();
+    await expect(noteRow.getByText("Signed", { exact: true })).toBeVisible();
     await logout(page);
   });
 
