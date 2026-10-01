@@ -49,6 +49,20 @@ cp .env.example .env
 
 # Run in dev mode (Vite HMR + tsx watch)
 npm run dev
+
+### Monorepo map
+
+```
+apps/web            React 19 + Vite + Tailwind 4 (editorial console)
+packages/contracts  Zod schemas, RFC 9457 errors, capabilities, locales
+packages/ui         Accessible editorial design system
+services/api        Express controllers, middleware, /api/v1
+services/domain     Request context, policies, clinical state machine
+services/data       Prisma schema + repositories + tenant transactions
+services/integrations  AI provider/redaction + FHIR mappings
+services/audit      Audit event catalog
+ops/                DB init + runbooks; scripts/ holds dev/E2E tooling
+```
 ```
 
 ## Coding Standards
@@ -115,7 +129,7 @@ data. Apply the RBAC middleware to restrict to ADMIN role only.
 
 1. **Fork and branch** from `main`: `git checkout -b fix/my-bugfix`.
 2. **One concern per PR**. Don't mix a bug fix with a refactor.
-3. **Tests must pass**: `npm test`.
+3. **Tests must pass**: `npm run test` (unit + integration) and, when touching UX, `npm run test:e2e`.
 4. **Typecheck must pass**: `npm run typecheck`.
 5. **Build must pass**: `npm run build`.
 6. **Audit must pass**: `npm audit --audit-level=high`.
@@ -143,7 +157,9 @@ data. Apply the RBAC middleware to restrict to ADMIN role only.
 - [ ] Adds new dependencies: yes/no (if yes, list)
 
 ## Testing
-- [ ] `npm test` passes
+- [ ] `npm run test` passes
+- [ ] `npm run lint` is clean
+- [ ] E2E still passes when UI/workflows changed (`npm run test:e2e`)
 - [ ] `npm run typecheck` passes
 - [ ] `npm run build` passes
 - [ ] Manually tested in dev mode
@@ -162,7 +178,7 @@ data. Apply the RBAC middleware to restrict to ADMIN role only.
 
 ```bash
 # Run all tests once
-npm test
+npm run test
 
 # Watch mode
 npm run test:watch

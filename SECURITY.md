@@ -4,10 +4,52 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.2.x   | :white_check_mark: |
-| < 1.2   | :x:                |
+| 2.x     | :white_check_mark: |
+| 1.x     | :x: (upgrade path via data-preserving migrations) |
 
-## Bug Bounty Audit (v1.2)
+## v2 Security Architecture (current)
+
+The v2 monorepo restructures the product around database-enforced controls.
+Highlights, all verified by the automated test suite:
+
+- **Tenant isolation in the database (RLS).** Every tenant table carries a
+  row-level security policy keyed on the transaction-local setting
+  `app.current_clinic_id`. The runtime connects as `medical_app`, a role
+  that owns nothing, cannot bypass policies, and cannot `UPDATE`/`DELETE`
+  audit rows (WORM). Cross-tenant reads return uniform 404s; cross-tenant
+  writes fail at the database (verified in `services/data/test`).
+- **Minimal-claim JWT + durable sessions.** Tokens carry only `sub`, `sid`,
+  `tid`; the profile is resolved server-side and revoking a session takes
+  effect immediately.
+- **Refresh tokens in PostgreSQL.** Atomic compare-and-set rotation with
+  family-based replay detection: replaying a rotated token revokes the whole
+  family and its session (`AUTH_TOKEN_REUSE_DETECTED`).
+- **Field-level PHI encryption.** AES-256-GCM per field with deterministic
+  HMAC-SHA256 search indexes - search never decrypts the directory.
+  Two separate keys (`ENCRYPTION_KEY`, `PHI_HMAC_KEY`), rotation documented
+  in ops/runbooks/incident-response.md.
+- **Strict production CSP** (no `unsafe-inline`), hardened Helmet set,
+  `no-store` on all API responses, CSRF double-submit, HMAC-verified and
+  idempotent webhooks, tiered rate limits (auth/search/export/AI).
+- **Break-glass access** is server-enforced for administrative record access:
+  `BREAK_GLASS_REQUIRED` (403) until a reason is recorded; the reason, actor
+  and 30-minute window live in the audit chain.
+- **Governed AI.** Providers are abstracted, prompts are versioned per
+  clinic, PHI is redacted before LLM calls (strip/redact/passthrough with
+  passthrough requiring a DPA), drafts require explicit clinician review,
+  and per-patient `AI_PROCESSING` consent can block generation entirely.
+- **No mock runtime.** Production refuses to start without a reachable
+  database; `/api/v1/health/ready` performs a real DB round-trip.
+
+## Historical hardening log
+
+The sections below document past audits and fixes for transparency. They
+describe the v1.x codebase; the v2 restructure supersedes the runtime design
+they refer to, but the threat reasoning remains useful reading. The former
+"unpatched runtime vulnerabilities" notice is resolved in v2 (the dependency
+tree was rebuilt; CI now gates on `npm audit --audit-level=high`).
+
+### Bug Bounty Audit (v1.2)
 
 A comprehensive bug bounty audit was performed on v1.2. The following bugs
 were found and fixed. This section documents them for transparency and to
@@ -187,79 +229,6 @@ help downstream users understand what was hardened.
   family), but a true atomic compare-and-set requires DB transaction
   support (future work). CWE-362.
 
-## Known issues (unpatched runtime vulnerabilities)
-
-As of the last `npm audit` run, three HIGH-severity advisories remain
-unpatched in runtime dependencies. They are documented here for
-transparency. None of them are exploitable from an unauthenticated
-client in the default deployment, but they should not be left
-unpatched indefinitely. The fix requires a major-version bump of the
-direct runtime dependencies involved, which is a breaking change and
-is deferred to a dedicated hardening sprint with full end-to-end
-testing. See the related GitHub issue for tracking.
-
-### HIGH: `ip-address` <= 10.3.0 (transitive via `express-rate-limit`)
-
-- Advisories:
-  - GHSA-mwp4-54f8-5fhr (leading-zero octet decoding -> SSRF / trust-boundary bypass)
-  - GHSA-4xrf-jv44-h6hh (CIDR suffix suppresses special-use classification)
-  - GHSA-22jq-vg5j-6vgg (IPv4-mapped / NAT64 IPv6 misclassification)
-- Where it lands: `express-rate-limit@^8.5.1` -> `ip-address@10.2.0`.
-- Why unpatched: bumping `express-rate-limit` from v8 to v7 is a breaking
-  API change (rate-limit API and store interface were renamed). Requires
-  rewriting `authLimiter` and the global limiter in `server.ts` and
-  re-running the rate-limit regression tests.
-- Accepted risk: `express-rate-limit` uses `ip-address` only to normalize
-  client IPs for the per-IP bucket. The boilerplate sits behind a
-  trusted proxy (`app.set('trust proxy', 1)`), so attacker-controlled
-  IPs are constrained by the proxy's own validation. Affects
-  availability (a crafted `X-Forwarded-For` could in theory dodge the
-  login brute-force limiter), not confidentiality or integrity.
-
-### HIGH: `browserslist` <= 4.28.6 (transitive via `@vitejs/plugin-react`)
-
-- Advisories:
-  - GHSA-c83g-rgw3-j3cx (unbounded memory growth via distinct query results -> OOM)
-  - GHSA-73wf-gq98-2v4g (uncaught crash via custom `browserslist-stats.json`)
-- Where it lands: `@vitejs/plugin-react@^5.0.4` -> `@babel/core` ->
-  `@babel/helper-compilation-targets` -> `browserslist@4.28.4`.
-- Why unpatched: bumping `@vitejs/plugin-react` from v5 to v6 requires
-  Vite 7+ which in turn requires Node 22+ and has breaking plugin
-  config changes. Requires a full build-matrix regression run.
-- Accepted risk: `browserslist` only runs at build time (Vite/Babel
-  transform), never in the runtime Node process serving clients. An
-  attacker would need write access to the build environment's
-  `browserslist-stats.json` to trigger the crash, which is equivalent
-  to already being compromised.
-
-### HIGH: `js-yaml` 4.0.0 - 4.3.1 (transitive via `swagger-jsdoc`)
-
-- Advisories:
-  - GHSA-5p4m-2wfm-xmqj (quadratic CPU in `!!omap` resolution)
-  - GHSA-2883-xcg3-v3hh (`maxTotalMergeKeys` does not limit empty merge sources)
-- Where it lands: `swagger-jsdoc@^6.2.8` -> `swagger-parser` ->
-  `@apidevtools/json-schema-ref-parser` -> `js-yaml@4.3.0`.
-  (Also reachable from `eslint@^9.15.0` via `@eslint/eslintrc`, but that
-  path is dev-only.)
-- Why unpatched: bumping `swagger-jsdoc` from v6 to v10+ requires
-  migrating the OpenAPI spec constructor from the v6 CommonJS signature
-  to the v10 ESM signature, and re-validating the generated
-  `/api-docs` output. Not a one-line bump.
-- Accepted risk: `swagger-jsdoc` is loaded lazily and only when
-  `NODE_ENV !== 'production'` (the `/api-docs` route is gated to
-  non-production). The production runtime does not parse attacker-supplied
-  YAML, so the quadratic-CPU path is not reachable by external inputs in
-  the default deployment.
-
-### Tracking
-
-These three are tracked in a single GitHub issue (link to be added when
-the issue is created). Resolution target: October 2026. The fix
-strategy is to bump the direct runtime parents (`express-rate-limit`,
-`@vitejs/plugin-react`, `swagger-jsdoc`) rather than patch the
-transitive packages individually, since `npm audit fix --force` would
-apply breaking changes blindly without the required API migration.
-
 ## Reporting a Vulnerability
 
 **Do not open public GitHub issues for security vulnerabilities.** Instead:
@@ -271,7 +240,7 @@ apply breaking changes blindly without the required API migration.
 
 We will acknowledge receipt within 48 hours and work with you on coordinated disclosure. Reporters who follow responsible disclosure will be credited (if desired) in the fix announcement.
 
-## Security Architecture
+### v1 Security Architecture (superseded by v2 above)
 
 This boilerplate implements the following security controls. Each is mapped to its implementation location for auditability.
 

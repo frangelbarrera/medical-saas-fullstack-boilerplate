@@ -1,60 +1,57 @@
 services:
   db:
     image: postgres:15-alpine
-    container_name: medical_saas_db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${PGUSER:-postgres}
       POSTGRES_PASSWORD: ${PGPASSWORD:?PGPASSWORD is required}
       POSTGRES_DB: ${PGDATABASE:-medical_saas_db}
+      MEDICAL_APP_PASSWORD: ${MEDICAL_APP_PASSWORD:?MEDICAL_APP_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Provisions the limited runtime role on first boot.
+      - ./ops/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-postgres} -d ${PGDATABASE:-medical_saas_db}"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     # Do NOT expose postgres to the host in production.
-    # Only the app service should reach it via the internal network.
-    # ports:
-    #   - "5432:5432"
 
   app:
     build: .
-    container_name: medical_saas_app
     restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required}
-      # Database
-      PGHOST: db
-      PGPORT: 5432
-      PGUSER: ${PGUSER:-postgres}
-      PGPASSWORD: ${PGPASSWORD:?PGPASSWORD is required}
-      PGDATABASE: ${PGDATABASE:-medical_saas_db}
-      # Prisma connection string
-      DATABASE_URL: postgresql://${PGUSER:-postgres}:${PGPASSWORD:?PGPASSWORD is required}@db:5432/${PGDATABASE:-medical_saas_db}?schema=public
-      # Required secrets (no defaults - the app will crash if missing)
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (min 32 chars)}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required (64 hex chars)}
-      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?PAYMENT_WEBHOOK_SECRET is required}
-      # First admin provisioning (optional - if not set, no admin is seeded)
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      ADMIN_NAME: ${ADMIN_NAME:-System Administrator}
-      ADMIN_CLINIC_ID: ${ADMIN_CLINIC_ID:-clinic_default}
-      ADMIN_CLINIC_NAME: ${ADMIN_CLINIC_NAME:-Default Clinic}
-      # Optional integrations
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      PAYMENT_GATEWAY_TOKEN: ${PAYMENT_GATEWAY_TOKEN:-}
-      PAYMENT_GATEWAY_URL: ${PAYMENT_GATEWAY_URL:-https://pay.payphone.com.ec/api/button/Prepare}
-      LLM_PHI_MODE: ${LLM_PHI_MODE:-strip}
     depends_on:
       db:
         condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # The app connects as the LIMITED role so row-level security applies.
+      DATABASE_URL: postgresql://medical_app:${MEDICAL_APP_PASSWORD:?MEDICAL_APP_PASSWORD is required}@db:5432/${PGDATABASE:-medical_saas_db}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      PHI_HMAC_KEY: ${PHI_HMAC_KEY:?PHI_HMAC_KEY is required}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LLM_PHI_MODE: ${LLM_PHI_MODE:-strip}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    ports:
+      - "3000:3000"
+
+  # One-shot migration runner: docker compose run --rm migrate
+  migrate:
+    build: .
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${PGUSER:-postgres}:${PGPASSWORD}@db:5432/${PGDATABASE:-medical_saas_db}?schema=public
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy", "--schema", "services/data/prisma/schema.prisma"]
 
 volumes:
   postgres_data:
