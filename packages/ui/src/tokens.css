@@ -1,0 +1,62 @@
+/**
+ * Editorial clinical console v2 - design tokens.
+ *
+ * Source of truth: design preview (editorial clinical console). Colors are
+ * verified for WCAG 2.2 AA contrast on their intended surfaces; state is
+ * never conveyed by color alone (text or icon always accompanies it).
+ */
+
+:root {
+  /* palette */
+  --paper: #f4f1eb;
+  --paper-deep: #e8e3da;
+  --ink: #191b1a;
+  --ink-soft: #5f625f;
+  --ink-faint: #85867e;
+  --rule: #d7d2c9;
+  --navy: #173b45;
+  --navy-deep: #102a31;
+  --navy-tint: #dfe8e6;
+  --moss: #5c796c;
+  --moss-tint: #e7eee7;
+  --signal: #b34a3a;
+  --signal-tint: #f3e4e0;
+  --focus: #145c9e;
+  --amber: #8e6b39;
+  --amber-tint: #f0e8d8;
+  --white: #fefdf9;
+
+  /* typography */
+  --serif: "DM Serif Display", Georgia, serif;
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* type scale */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --text-2xl: 36px;
+  --text-3xl: 52px;
+
+  /* rhythm */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 17px;
+  --space-5: 22px;
+  --space-6: 32px;
+  --space-7: 52px;
+  --space-8: 62px;
+
+  /* structure */
+  --rail-width: 210px;
+  --rail-width-collapsed: 72px;
+  --masthead-height: 68px;
+  --view-max-width: 1320px;
+  --rule-strong: 2px solid var(--ink);
+  --rule-soft: 1px solid var(--rule);
+}

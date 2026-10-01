@@ -1,0 +1,94 @@
+@import "tailwindcss";
+@import "@fontsource/dm-serif-display/400.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "../../../packages/ui/src/tokens.css";
+
+@source "../../../packages/ui/src/**/*.{ts,tsx}";
+
+@theme {
+  --color-paper: #f4f1eb;
+  --color-paper-deep: #e8e3da;
+  --color-ink: #191b1a;
+  --color-ink-soft: #5f625f;
+  --color-ink-faint: #85867e;
+  --color-rule: #d7d2c9;
+  --color-navy: #173b45;
+  --color-navy-deep: #102a31;
+  --color-navy-tint: #dfe8e6;
+  --color-moss: #5c796c;
+  --color-moss-tint: #e7eee7;
+  --color-signal: #b34a3a;
+  --color-signal-tint: #f3e4e0;
+  --color-focus: #145c9e;
+  --color-amber: #8e6b39;
+  --color-amber-tint: #f0e8d8;
+  --color-white: #fefdf9;
+
+  --font-serif: "DM Serif Display", Georgia, serif;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --text-2xl: 36px;
+  --text-3xl: 52px;
+}
+
+html {
+  background: var(--color-paper);
+}
+
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Editorial focus ring: always visible on keyboard focus. */
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Dense scrollbars for data areas. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-rule) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* skip link (a11y): first tab stop */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--color-ink);
+  color: var(--color-white);
+  padding: 8px 14px;
+  z-index: 100;
+  font-size: 12px;
+}
+.skip-link:focus {
+  left: 8px;
+  top: 8px;
+}
