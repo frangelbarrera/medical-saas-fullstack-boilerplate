@@ -3,6 +3,7 @@
  * and a provider-neutral idempotent webhook inbox.
  */
 import crypto from "crypto";
+import { DomainError } from "@medical/domain";
 import type { Tx } from "../client.js";
 import type {
   BillingSummary,
@@ -146,8 +147,24 @@ export class BillingRepository {
     invoiceId: string,
     input: PaymentCreate,
   ): Promise<Payment | null> {
+    // Serialize concurrent payments on the same invoice so the balance check
+    // below cannot race (two partial payments both passing the guard).
+    const locked = await this.tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM invoices WHERE id = ${invoiceId} AND clinic_id = ${ctx.tenantId} FOR UPDATE`;
+    if (locked.length === 0) return null;
+
     const invoice = await this.findInvoice(ctx.tenantId, invoiceId);
     if (!invoice) return null;
+    if (invoice.status === "CANCELLED") {
+      throw new DomainError("CONFLICT", "Cannot record a payment on a cancelled invoice");
+    }
+    const outstanding = Number(invoice.total) - Number(invoice.paidTotal);
+    if (input.amount > outstanding) {
+      throw new DomainError(
+        "UNPROCESSABLE",
+        `Payment exceeds the outstanding balance (${outstanding.toFixed(2)} ${invoice.currency} remaining on ${invoice.number})`,
+      );
+    }
 
     const p = await this.tx.payment.create({
       data: {

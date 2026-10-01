@@ -187,3 +187,144 @@ describe("security headers", () => {
     expect(res.body.database).toBe("up");
   });
 });
+
+describe("billing workflow", () => {
+  let patientId: string;
+  let invoiceId: string;
+
+  it("signs back in for the billing run", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/login")
+      .send({ username: "httpadmin", password: PASSWORD, deviceLabel: "vitest-billing" });
+    expect(res.status).toBe(200);
+    parseCookies(res);
+    csrf = res.body.csrfToken;
+  });
+
+  it("creates a patient to bill", async () => {
+    const res = await request(app)
+      .post("/api/v1/patients")
+      .set(authHeaders())
+      .send({ fullName: "Billing Patient" });
+    expect(res.status).toBe(201);
+    patientId = res.body.id;
+  });
+
+  it("creates an invoice with line items and a computed total", async () => {
+    const res = await request(app)
+      .post("/api/v1/invoices")
+      .set(authHeaders())
+      .send({
+        patientId,
+        items: [
+          { description: "Consultation", quantity: 1, unitPrice: 100 },
+          { description: "Lab panel", quantity: 2, unitPrice: 25.5 },
+        ],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.total).toBe(151);
+    expect(res.body.status).toBe("ISSUED");
+    invoiceId = res.body.id;
+  });
+
+  it("rejects payments above the outstanding balance", async () => {
+    const res = await request(app)
+      .post(`/api/v1/invoices/${invoiceId}/payments`)
+      .set(authHeaders())
+      .send({ amount: 151.01, method: "BANK_TRANSFER" });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("UNPROCESSABLE");
+  });
+
+  it("records a partial payment and reconciles to PARTIALLY_PAID", async () => {
+    const pay = await request(app)
+      .post(`/api/v1/invoices/${invoiceId}/payments`)
+      .set(authHeaders())
+      .send({ amount: 51, method: "BANK_TRANSFER" });
+    expect(pay.status).toBe(201);
+
+    const list = await request(app).get("/api/v1/invoices?page=1&limit=10").set(authHeaders());
+    const invoice = list.body.items.find((i: { id: string }) => i.id === invoiceId);
+    expect(invoice.status).toBe("PARTIALLY_PAID");
+    expect(invoice.paidTotal).toBe(51);
+  });
+
+  it("rejects payments that exceed the remaining balance mid-way", async () => {
+    const res = await request(app)
+      .post(`/api/v1/invoices/${invoiceId}/payments`)
+      .set(authHeaders())
+      .send({ amount: 100.01, method: "CASH" });
+    expect(res.status).toBe(422);
+  });
+
+  it("settles the invoice and reconciles to PAID", async () => {
+    const pay = await request(app)
+      .post(`/api/v1/invoices/${invoiceId}/payments`)
+      .set(authHeaders())
+      .send({ amount: 100, method: "CASH" });
+    expect(pay.status).toBe(201);
+
+    const list = await request(app).get("/api/v1/invoices?page=1&limit=10").set(authHeaders());
+    const invoice = list.body.items.find((i: { id: string }) => i.id === invoiceId);
+    expect(invoice.status).toBe("PAID");
+    expect(invoice.paidTotal).toBe(151);
+  });
+
+  it("rejects any further payment on a settled invoice", async () => {
+    const res = await request(app)
+      .post(`/api/v1/invoices/${invoiceId}/payments`)
+      .set(authHeaders())
+      .send({ amount: 1, method: "CASH" });
+    expect(res.status).toBe(422);
+  });
+
+  it("rejects payments on a cancelled invoice", async () => {
+    const created = await request(app)
+      .post("/api/v1/invoices")
+      .set(authHeaders())
+      .send({ patientId, items: [{ description: "Cancelled service", quantity: 1, unitPrice: 40 }] });
+    expect(created.status).toBe(201);
+
+    const cancel = await request(app)
+      .patch(`/api/v1/invoices/${created.body.id}/status`)
+      .set(authHeaders())
+      .send({ status: "CANCELLED" });
+    expect(cancel.status).toBe(200);
+
+    const pay = await request(app)
+      .post(`/api/v1/invoices/${created.body.id}/payments`)
+      .set(authHeaders())
+      .send({ amount: 10, method: "CASH" });
+    expect(pay.status).toBe(409);
+  });
+
+  it("accepts, rejects and dedupes payment webhooks idempotently", async () => {
+    const crypto = await import("node:crypto");
+    const secret = process.env.PAYMENT_WEBHOOK_SECRET ?? "test_webhook_secret_min_16_chars";
+    const event = {
+      id: `evt_http_${Date.now()}`,
+      provider: "generic",
+      type: "payment.completed",
+      amount: "51.00",
+      currency: "CHF",
+    };
+    const sign = crypto.createHmac("sha256", secret).update(JSON.stringify(event)).digest("hex");
+
+    const ok = await request(app).post("/api/v1/webhooks/payment").set("x-signature", sign).send(event);
+    expect(ok.status).toBe(200);
+    expect(ok.body.status).toBe("PROCESSED");
+
+    // Identical delivery (network retry): deduplicated, never applied twice.
+    const replay = await request(app).post("/api/v1/webhooks/payment").set("x-signature", sign).send(event);
+    expect(replay.status).toBe(200);
+    expect(replay.body.status).toBe("DUPLICATE");
+
+    // Forged signature: recorded as rejected, never settled.
+    const forged = await request(app).post("/api/v1/webhooks/payment").set("x-signature", "deadbeef").send({
+      ...event,
+      id: `evt_http_forged_${Date.now()}`,
+    });
+    expect(forged.status).toBe(200);
+    expect(forged.body.status).toBe("REJECTED");
+  });
+});

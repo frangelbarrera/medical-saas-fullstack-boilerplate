@@ -44,6 +44,22 @@ export const toProblem = (err: unknown): ProblemDetail => {
       errors: zodErr.issues.map((i) => ({ field: i.path.join("."), message: i.message })),
     });
   }
+  // Body-parser failures (malformed JSON, unsupported encoding, size limits)
+  // carry a numeric status + machine type; never surface their raw message.
+  const parserErr = err as { type?: string; status?: number };
+  if (
+    typeof parserErr?.status === "number" &&
+    parserErr.status >= 400 &&
+    parserErr.status < 500 &&
+    typeof parserErr.type === "string"
+  ) {
+    if (parserErr.status === 413) {
+      return problem("PAYLOAD_TOO_LARGE", "Request body exceeds the accepted size", 413);
+    }
+    return problem("VALIDATION_FAILED", "Request body could not be parsed", 400, {
+      detail: "The request body is malformed or uses an unsupported encoding.",
+    });
+  }
   return problem("INTERNAL", "Internal server error", 500);
 };
 

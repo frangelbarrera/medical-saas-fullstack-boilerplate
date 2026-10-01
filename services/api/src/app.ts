@@ -117,6 +117,10 @@ export async function createApp(): Promise<express.Application> {
     if (req.method === "GET" && req.path === "/health") {
       return res.json({ status: "ok", timestamp: new Date().toISOString() });
     }
+    // Unknown paths already on /api/v1 are genuine 404s, not redirects.
+    if (req.path === "/v1" || req.path.startsWith("/v1/")) {
+      return notFoundHandler(req, res);
+    }
     res.setHeader("Location", `/api/v1${req.originalUrl.slice(4)}`);
     res.status(308).json({ error: "API moved to /api/v1" });
   });
