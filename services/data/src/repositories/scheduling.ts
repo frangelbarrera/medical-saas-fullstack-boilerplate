@@ -115,6 +115,20 @@ export class SchedulingRepository {
       },
       include: this.include(),
     });
+    // Booking an appointment starts the treating relationship (CLIN-004):
+    // the booked doctor joins the patient's care team automatically.
+    await this.tx.careTeamMembership.upsert({
+      where: {
+        clinicId_patientId_userId_memberRole: {
+          clinicId,
+          patientId: input.patientId,
+          userId: input.doctorId,
+          memberRole: "CARING_DOCTOR",
+        },
+      },
+      create: { clinicId, patientId: input.patientId, userId: input.doctorId, memberRole: "CARING_DOCTOR" },
+      update: { endedAt: null },
+    });
     return this.toDto(a);
   }
 

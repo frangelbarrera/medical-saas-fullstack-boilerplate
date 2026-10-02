@@ -142,6 +142,19 @@ export class PatientRepository {
     return p !== null;
   }
 
+  /**
+   * Directory-visible projection (id, internalRef, name). Exactly the fields
+   * a 403 problem meta may carry so a client can render the access gate
+   * without receiving contact PHI.
+   */
+  async findRef(clinicId: string, id: string): Promise<{ id: string; internalRef: string; fullName: string } | null> {
+    const p = await this.tx.patient.findFirst({
+      where: { clinicId, id },
+      select: { id: true, internalRef: true, fullName: true },
+    });
+    return p;
+  }
+
   async create(clinicId: string, input: PatientCreate): Promise<PatientDetail> {
     const internalRef = await this.nextInternalRef(clinicId);
     const id = crypto.randomUUID();
@@ -190,6 +203,22 @@ export class PatientRepository {
         throw err;
       }
     }
+    // A patient created with a primary doctor starts the treating
+    // relationship right away (CLIN-004).
+    if (input.primaryDoctorId) {
+      await this.tx.careTeamMembership.upsert({
+        where: {
+          clinicId_patientId_userId_memberRole: {
+            clinicId,
+            patientId: id,
+            userId: input.primaryDoctorId,
+            memberRole: "CARING_DOCTOR",
+          },
+        },
+        create: { clinicId, patientId: id, userId: input.primaryDoctorId, memberRole: "CARING_DOCTOR" },
+        update: { endedAt: null },
+      });
+    }
     const created = await this.findById(clinicId, id);
     if (!created) throw new Error("Patient creation failed");
     return created;
@@ -220,6 +249,24 @@ export class PatientRepository {
     if (input.defaultPayerId !== undefined) data.defaultPayerId = input.defaultPayerId;
 
     await this.tx.patient.update({ where: { id }, data });
+
+    // Assigning a primary doctor starts the treating relationship (CLIN-004):
+    // the doctor receives an ACTIVE care-team membership automatically.
+    if (input.primaryDoctorId) {
+      await this.tx.careTeamMembership.upsert({
+        where: {
+          clinicId_patientId_userId_memberRole: {
+            clinicId,
+            patientId: id,
+            userId: input.primaryDoctorId,
+            memberRole: "CARING_DOCTOR",
+          },
+        },
+        create: { clinicId, patientId: id, userId: input.primaryDoctorId, memberRole: "CARING_DOCTOR" },
+        update: { endedAt: null },
+      });
+    }
+
     return this.findById(clinicId, id);
   }
 

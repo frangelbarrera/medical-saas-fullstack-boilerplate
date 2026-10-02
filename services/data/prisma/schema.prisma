@@ -198,6 +198,7 @@ model Clinic {
   locale         String   @default("en-CH")
   timezone       String   @default("Europe/Zurich")
   currency       String   @default("CHF")
+  jurisdiction   String   @default("CH") // active compliance pack (CH/EU/UK/US/CA/AU)
   retentionYears Int      @default(20) @map("retention_years")
   ownerId        String?  @map("owner_id")
   createdAt      DateTime @default(now()) @map("created_at")
@@ -223,6 +224,8 @@ model Clinic {
   notifications    Notification[]
   availabilityRules AvailabilityRule[]
   breakGlassAccesses BreakGlassAccess[]
+  careTeamMemberships CareTeamMembership[]
+  dsarArtifacts      DsarArtifact[]
 
   @@map("clinics")
 }
@@ -238,6 +241,8 @@ model User {
   role         UserRole  @default(SECRETARY)
   isActive     Boolean   @default(true) @map("is_active")
   patientId    String?   @unique @map("patient_id")
+  totpSecretEnc String?  @map("totp_secret_enc") // AES-256-GCM ciphertext of the base32 secret
+  totpEnabledAt DateTime? @map("totp_enabled_at")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
@@ -259,6 +264,8 @@ model User {
   threadParticipants ThreadParticipant[]
   messages          Message[]
   dsarRequests      DsarRequest[]      @relation("DsarRequester")
+  approvedDsars     DsarRequest[]      @relation("DsarApprover")
+  careMemberships   CareTeamMembership[]
   aiConversations   AiConversation[]
   aiDrafts          AiDraft[]          @relation("AiDraftAuthor")
   reviewedDrafts    AiDraft[]          @relation("AiDraftReviewer")
@@ -297,6 +304,7 @@ model Patient {
   primaryDoctor     User?                @relation("PatientPrimaryDoctor", fields: [primaryDoctorId], references: [id], onDelete: SetNull)
   defaultPayer      Payer?               @relation("PatientDefaultPayer", fields: [defaultPayerId], references: [id], onDelete: SetNull)
   identifiers       PatientIdentifier[]
+  careTeamMemberships CareTeamMembership[]
   consents          PatientConsent[]
   portalUsers       User[]               @relation("PatientPortalUser")
   appointments      Appointment[]
@@ -605,6 +613,29 @@ model BreakGlassAccess {
   @@map("break_glass_accesses")
 }
 
+/// Treating relationship between a staff member and a patient (CLIN-004).
+/// Clinical access requires an ACTIVE membership (or the primary-doctor
+/// assignment); assignments and endings are audited by the API layer.
+model CareTeamMembership {
+  id         String    @id @default(uuid())
+  clinicId   String    @map("clinic_id")
+  patientId  String    @map("patient_id")
+  userId     String    @map("user_id")
+  memberRole String    @default("CARING_DOCTOR") @map("member_role")
+  startedAt  DateTime  @default(now()) @map("started_at")
+  endedAt    DateTime? @map("ended_at")
+  createdById String?  @map("created_by_id")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, patientId, userId, memberRole])
+  @@index([clinicId, userId, endedAt])
+  @@index([clinicId, patientId, endedAt])
+  @@map("care_team_memberships")
+}
+
 // ==========================================
 // COMMUNICATIONS
 // ==========================================
@@ -783,6 +814,9 @@ model Session {
   userId     String    @map("user_id")
   clinicId   String    @map("clinic_id")
   deviceLabel String?  @map("device_label")
+  /// Last successful step-up re-authentication (password [+ TOTP]); opens a
+  /// short privileged window for privacy-critical operations (DSAR release).
+  stepUpAt   DateTime? @map("step_up_at")
   createdAt  DateTime  @default(now()) @map("created_at")
   lastSeenAt DateTime  @default(now()) @map("last_seen_at")
   expiresAt  DateTime  @map("expires_at")
@@ -866,9 +900,63 @@ model DsarRequest {
   clinic     Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   patient    Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
   requestedBy User   @relation("DsarRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy User?   @relation("DsarApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  artifacts  DsarArtifact[]
+  downloadTokens DsarDownloadToken[]
+
+  /// Governed release lifecycle: prepare (encrypted artifact) -> dual-control
+  /// approval (approver != requester) -> one-time download token -> audited
+  /// single-use download.
+  preparedById       String?   @map("prepared_by_id")
+  preparedAt         DateTime? @map("prepared_at")
+  artifactExpiresAt  DateTime? @map("artifact_expires_at")
+  approvedById       String?   @map("approved_by_id")
+  approvedAt         DateTime? @map("approved_at")
+  downloadIssuedAt   DateTime? @map("download_issued_at")
+  downloadExpiresAt  DateTime? @map("download_expires_at")
+  downloadedAt       DateTime? @map("downloaded_at")
 
   @@index([clinicId, status])
   @@map("dsar_requests")
+}
+
+/// Encrypted DSAR export artifact (PHI at rest stays tenant-isolated).
+/// The payload is AES-256-GCM ciphertext of the full export bundle.
+model DsarArtifact {
+  id           String   @id @default(uuid())
+  clinicId     String   @map("clinic_id")
+  requestId    String   @map("request_id")
+  ciphertext   String // 'iv:authTag:ciphertext' hex
+  byteSize     Int      @map("byte_size")
+  contentHash  String   @map("content_hash") // SHA-256 of the plaintext for integrity
+  preparedById String   @map("prepared_by_id")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  clinic   Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  request  DsarRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, requestId])
+  @@map("dsar_artifacts")
+}
+
+/// One-time download tokens (infrastructure table, deliberately outside RLS:
+/// it stores only a SHA-256 hash of the token, never the token itself and no
+/// PHI). Consumption uses a compare-and-set UPDATE so a replayed token fails.
+model DsarDownloadToken {
+  id          String    @id @default(uuid())
+  requestId   String    @map("request_id")
+  clinicId    String    @map("clinic_id")
+  tokenHash   String    @unique @map("token_hash")
+  issuedById  String    @map("issued_by_id")
+  expiresAt   DateTime  @map("expires_at")
+  consumedAt  DateTime? @map("consumed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  request DsarRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@map("dsar_download_tokens")
 }
 
 // ==========================================

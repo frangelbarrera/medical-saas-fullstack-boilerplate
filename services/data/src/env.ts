@@ -19,6 +19,15 @@ export const envSchema = z.object({
   TRUST_PROXY: z.string().default("1"),
   GEMINI_API_KEY: z.string().optional(),
   LLM_PHI_MODE: z.enum(["strip", "redact", "passthrough"]).default("strip"),
+  // Governance records for LLM passthrough (fail-closed, AI-001): the server
+  // refuses to start in passthrough mode unless every one of these is set,
+  // proving a signed DPA/BAA, an approved provider, a documented processing
+  // location, zero-retention training opt-out and a completed DPIA.
+  LLM_DPA_RECORDED: z.string().optional(),
+  LLM_PROVIDER_APPROVED: z.string().optional(),
+  LLM_DATA_RESIDENCY: z.string().optional(),
+  LLM_ZERO_RETENTION: z.string().optional(),
+  LLM_DPIA_RECORDED: z.string().optional(),
   PAYMENT_WEBHOOK_SECRET: z.string().min(16).optional(),
   PAYMENT_GATEWAY_TOKEN: z.string().optional(),
 });
@@ -38,6 +47,26 @@ export function loadEnv(): Env {
       process.exit(1);
     }
     cached = parsed.data;
+  }
+  // Fail-closed passthrough gate: sending PHI as-is to a processor is only
+  // legal with a full governance record. Missing any piece disables the mode.
+  if (cached.LLM_PHI_MODE === "passthrough") {
+    const missing = [
+      "LLM_DPA_RECORDED",
+      "LLM_PROVIDER_APPROVED",
+      "LLM_DATA_RESIDENCY",
+      "LLM_ZERO_RETENTION",
+      "LLM_DPIA_RECORDED",
+    ].filter((k) => !process.env[k] || process.env[k]!.trim() === "");
+    if (missing.length > 0) {
+      console.error(
+        // eslint-disable-next-line no-secrets/no-secrets -- mode name, not a secret
+        "LLM_PHI_MODE=passthrough requires the full governance record; missing: " +
+          missing.join(", ") +
+          ". Falling back to 'redact'. Set these env records only after the DPA, DPIA and provider review are complete.",
+      );
+      cached = { ...cached, LLM_PHI_MODE: "redact" };
+    }
   }
   return cached;
 }

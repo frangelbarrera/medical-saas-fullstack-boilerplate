@@ -62,6 +62,14 @@ export class AuthRepository {
     }).catch(() => undefined);
   }
 
+  /** Open the privileged step-up window on the session (5 minutes). */
+  async markStepUp(sessionId: string): Promise<void> {
+    await this.tx.session.update({
+      where: { id: sessionId },
+      data: { stepUpAt: new Date() },
+    });
+  }
+
   async revokeSession(sessionId: string): Promise<void> {
     await this.tx.session.update({
       where: { id: sessionId },

@@ -13,6 +13,8 @@ export interface UserRecord {
   isActive: boolean;
   clinicId: string;
   patientId: string | null;
+  totpSecretEnc: string | null;
+  totpEnabledAt: Date | null;
 }
 
 export class UserRepository {
@@ -99,6 +101,29 @@ export class UserRepository {
     return bcrypt.compare(password, record.passwordHash);
   }
 
+  /** Store the encrypted TOTP secret (enrollment start); not yet active. */
+  async setTotpSecret(clinicId: string, id: string, secretEnc: string): Promise<void> {
+    await this.tx.user.updateMany({
+      where: { clinicId, id },
+      data: { totpSecretEnc: secretEnc, totpEnabledAt: null },
+    });
+  }
+
+  /** Confirm the first valid code: the factor becomes active. */
+  async activateTotp(clinicId: string, id: string): Promise<void> {
+    await this.tx.user.updateMany({
+      where: { clinicId, id, totpSecretEnc: { not: null } },
+      data: { totpEnabledAt: new Date() },
+    });
+  }
+
+  async disableTotp(clinicId: string, id: string): Promise<void> {
+    await this.tx.user.updateMany({
+      where: { clinicId, id },
+      data: { totpSecretEnc: null, totpEnabledAt: null },
+    });
+  }
+
   private toRecord(u: {
     id: string;
     username: string;
@@ -108,6 +133,8 @@ export class UserRepository {
     isActive: boolean;
     clinicId: string;
     patientId: string | null;
+    totpSecretEnc: string | null;
+    totpEnabledAt: Date | null;
   }): UserRecord {
     return {
       id: u.id,
@@ -118,6 +145,8 @@ export class UserRepository {
       isActive: u.isActive,
       clinicId: u.clinicId,
       patientId: u.patientId,
+      totpSecretEnc: u.totpSecretEnc,
+      totpEnabledAt: u.totpEnabledAt,
     };
   }
 }
@@ -139,6 +168,7 @@ export class ClinicRepository {
       locale: string;
       timezone: string;
       currency: string;
+      jurisdiction: string;
       retentionYears: number;
     }>,
   ) {
@@ -188,6 +218,8 @@ export class ClinicRepository {
       isActive: u.isActive,
       clinicId: u.clinicId,
       patientId: u.patientId,
+      totpSecretEnc: u.totpSecretEnc,
+      totpEnabledAt: u.totpEnabledAt,
     };
   }
 }

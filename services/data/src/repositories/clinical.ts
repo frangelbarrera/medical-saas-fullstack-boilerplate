@@ -113,6 +113,20 @@ export class ClinicalRepository {
         status: "DRAFT",
       },
     });
+    // Documenting an encounter starts the treating relationship (CLIN-004):
+    // the authoring clinician joins the patient's care team automatically.
+    await this.tx.careTeamMembership.upsert({
+      where: {
+        clinicId_patientId_userId_memberRole: {
+          clinicId: ctx.tenantId,
+          patientId: input.patientId,
+          userId: ctx.actorId,
+          memberRole: "CARING_DOCTOR",
+        },
+      },
+      create: { clinicId: ctx.tenantId, patientId: input.patientId, userId: ctx.actorId, memberRole: "CARING_DOCTOR" },
+      update: { endedAt: null },
+    });
     await this.snapshotVersion(ctx, id, 1, "Initial draft");
     const created = await this.findById(ctx.tenantId, id);
     if (!created) throw new Error("Encounter creation failed");
@@ -333,6 +347,17 @@ export class ClinicalRepository {
     return rows.map((p) => this.problemDto(p));
   }
 
+  /** Pre-write authorization finders: resolve the owning patient first. */
+  async findProblemPatient(clinicId: string, id: string): Promise<string | null> {
+    const p = await this.tx.problem.findFirst({ where: { clinicId, id }, select: { patientId: true } });
+    return p?.patientId ?? null;
+  }
+
+  async findMedicationPatient(clinicId: string, id: string): Promise<string | null> {
+    const m = await this.tx.medicationOrder.findFirst({ where: { clinicId, id }, select: { patientId: true } });
+    return m?.patientId ?? null;
+  }
+
   async setProblemStatus(clinicId: string, id: string, status: string): Promise<Problem | null> {
     const existing = await this.tx.problem.findFirst({ where: { clinicId, id } });
     if (!existing) return null;
@@ -536,6 +561,88 @@ export class ClinicalRepository {
       select: { id: true },
     });
     return Boolean(bg);
+  }
+
+  // ------------------------------------------------------------------ care team
+
+  /**
+   * Treating-relationship check (CLIN-004): an ACTIVE membership or the
+   * primary-doctor assignment. Any other doctor is outside the care team,
+   * regardless of capabilities.
+   */
+  async hasCareRelationship(clinicId: string, doctorId: string, patientId: string): Promise<boolean> {
+    const membership = await this.tx.careTeamMembership.findFirst({
+      where: { clinicId, patientId, userId: doctorId, endedAt: null },
+      select: { id: true },
+    });
+    if (membership) return true;
+    const primary = await this.tx.patient.findFirst({
+      where: { clinicId, id: patientId, primaryDoctorId: doctorId },
+      select: { id: true },
+    });
+    return primary !== null;
+  }
+
+  async listCareTeam(clinicId: string, patientId: string): Promise<
+    { id: string; patientId: string; userId: string; userName: string; userRole: string; memberRole: string; startedAt: string; endedAt: string | null }[]
+  > {
+    const rows = await this.tx.careTeamMembership.findMany({
+      where: { clinicId, patientId },
+      orderBy: { startedAt: "asc" },
+      include: { user: { select: { fullName: true, role: true } } },
+    });
+    return rows.map((m) => ({
+      id: m.id,
+      patientId: m.patientId,
+      userId: m.userId,
+      userName: m.user.fullName,
+      userRole: m.user.role,
+      memberRole: m.memberRole,
+      startedAt: m.startedAt.toISOString(),
+      endedAt: m.endedAt?.toISOString() ?? null,
+    }));
+  }
+
+  /** Idempotent assignment: re-activating an ended membership reuses the row. */
+  async assignCareTeamMember(
+    ctx: { tenantId: string; actorId: string },
+    patientId: string,
+    userId: string,
+    memberRole: string,
+  ): Promise<string> {
+    const existing = await this.tx.careTeamMembership.findFirst({
+      where: { clinicId: ctx.tenantId, patientId, userId, memberRole },
+    });
+    if (existing) {
+      if (existing.endedAt === null) return existing.id;
+      await this.tx.careTeamMembership.update({
+        where: { id: existing.id },
+        data: { endedAt: null, startedAt: new Date(), createdById: ctx.actorId },
+      });
+      return existing.id;
+    }
+    const m = await this.tx.careTeamMembership.create({
+      data: {
+        clinicId: ctx.tenantId,
+        patientId,
+        userId,
+        memberRole,
+        createdById: ctx.actorId,
+      },
+    });
+    return m.id;
+  }
+
+  async endCareTeamMember(clinicId: string, patientId: string, membershipId: string): Promise<boolean> {
+    const existing = await this.tx.careTeamMembership.findFirst({
+      where: { clinicId, id: membershipId, patientId },
+    });
+    if (!existing || existing.endedAt) return false;
+    await this.tx.careTeamMembership.update({
+      where: { id: membershipId },
+      data: { endedAt: new Date() },
+    });
+    return true;
   }
 
   // ------------------------------------------------------------------ summary
