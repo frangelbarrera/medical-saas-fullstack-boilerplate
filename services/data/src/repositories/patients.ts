@@ -4,8 +4,8 @@
  *
  * Lists return the minimum necessary projection (UX-003 / privacy by default):
  * no full identifiers, no contact data. Detail decryption happens only for
- * callers the API layer has already authorized with clinical:read or
- * patients:write + self.
+ * callers the API layer has already authorized with patients:phi_write + self
+ * scope or a clinical read grant.
  */
 import crypto from "crypto";
 import type { Tx } from "../client.js";
@@ -13,6 +13,7 @@ import { encryptPHI, decryptPHI, hmacIndex } from "../crypto.js";
 import type {
   PatientCreate,
   PatientDetail,
+  PatientDirectoryDetail,
   PatientListItem,
   PatientSearchQuery,
   PatientUpdate,
@@ -133,6 +134,35 @@ export class PatientRepository {
         expiresAt: c.expiresAt?.toISOString() ?? null,
         note: c.note,
       })),
+    };
+  }
+
+  /**
+   * Directory-only projection (SEC-001). Reads plaintext columns of the
+   * directory surface only - it never calls decryptPHI, so no contact field,
+   * identifier or consent can leak through this path, regardless of the
+   * caller's role.
+   */
+  async findDirectoryDetail(clinicId: string, id: string): Promise<PatientDirectoryDetail | null> {
+    const p = await this.tx.patient.findFirst({
+      where: { clinicId, id },
+      select: {
+        id: true,
+        internalRef: true,
+        fullName: true,
+        status: true,
+        primaryDoctorId: true,
+        primaryDoctor: { select: { fullName: true } },
+      },
+    });
+    if (!p) return null;
+    return {
+      id: p.id,
+      internalRef: p.internalRef,
+      fullName: p.fullName,
+      status: p.status,
+      primaryDoctorId: p.primaryDoctorId,
+      primaryDoctorName: p.primaryDoctor?.fullName ?? null,
     };
   }
 

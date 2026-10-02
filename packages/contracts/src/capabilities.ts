@@ -7,9 +7,11 @@
  */
 
 export const CAPABILITIES = [
-  // patients
+  // patients: directory data (name, ref, status, agenda links) is separated
+  // from protected PHI (contact details, birth date, identifiers, consents)
   "patients:read",
-  "patients:write",
+  "patients:directory_write",
+  "patients:phi_write",
   // clinical record
   "clinical:read",
   "clinical:write",
@@ -50,10 +52,13 @@ const STAFF_BASE: Capability[] = [
   "messages:write",
 ];
 
+/** Full clinical record access incl. contact PHI, identifiers and consents. */
+const PHI_WRITE: Capability[] = ["patients:directory_write", "patients:phi_write"];
+
 const ROLE_CAPABILITIES: Record<Role, Capability[]> = {
   ADMIN: [
     ...STAFF_BASE,
-    "patients:write",
+    ...PHI_WRITE,
     "clinical:read",
     "clinical:write",
     "clinical:sign",
@@ -71,7 +76,7 @@ const ROLE_CAPABILITIES: Record<Role, Capability[]> = {
   ],
   DOCTOR: [
     ...STAFF_BASE,
-    "patients:write",
+    ...PHI_WRITE,
     "clinical:read",
     "clinical:write",
     "clinical:sign",
@@ -82,9 +87,11 @@ const ROLE_CAPABILITIES: Record<Role, Capability[]> = {
     "audit:read",
     "ai:use",
   ],
+  // SECRETARY (SEC-001): directory maintenance and scheduling only - never
+  // contact PHI, identifiers, consents or the clinical record.
   SECRETARY: [
     ...STAFF_BASE,
-    "patients:write",
+    "patients:directory_write",
     "schedule:write",
     "billing:read",
     "billing:write",

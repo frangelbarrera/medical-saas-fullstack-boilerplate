@@ -71,7 +71,7 @@ export const PatientsView = () => {
           </h1>
           <p className="text-sm text-ink-soft mt-3 mb-0">{t("patients.lede")}</p>
         </div>
-        {can("patients:write") ? (
+        {can("patients:phi_write") ? (
           <Button variant="action" arrow onClick={() => setModalOpen(true)}>{t("patients.add")}</Button>
         ) : null}
       </div>

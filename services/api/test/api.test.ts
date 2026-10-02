@@ -88,7 +88,7 @@ describe("auth lifecycle", () => {
       .send({ username: "httpadmin", password: PASSWORD, deviceLabel: "vitest" });
     expect(res.status).toBe(200);
     expect(res.body.username).toBe("httpadmin");
-    expect(res.body.capabilities).toContain("patients:write");
+    expect(res.body.capabilities).toContain("patients:phi_write");
     parseCookies(res);
     csrf = res.body.csrfToken;
     expect(csrf).toBeTruthy();

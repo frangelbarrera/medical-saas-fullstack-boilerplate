@@ -16,6 +16,14 @@ import { problem } from "@medical/contracts";
 
 const message = (title: string) => problem("RATE_LIMITED", title, 429);
 
+/**
+ * Test scale factor: the integration suites drive hundreds of authenticated
+ * requests from one source IP within seconds. Production limits are
+ * unchanged; under test every threshold is relaxed by the same factor so
+ * the limiter still works but never masks an authorization result.
+ */
+const limitScale = process.env.NODE_ENV === "test" ? 100 : 1;
+
 export const corsMiddleware = cors({
   origin: (origin, cb) => {
     const env = loadEnv();
@@ -28,7 +36,7 @@ export const corsMiddleware = cors({
 
 export const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500,
+  max: 500 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
   message: [message("Too many requests, please try again later")],
@@ -36,7 +44,7 @@ export const globalLimiter = rateLimit({
 
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 20 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
   message: [message("Too many sign-in attempts, please try again later")],
@@ -44,7 +52,7 @@ export const authLimiter = rateLimit({
 
 export const searchLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 200 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
   message: [message("Search rate limit reached, please slow down")],
@@ -52,7 +60,7 @@ export const searchLimiter = rateLimit({
 
 export const aiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 40,
+  max: 40 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
   message: [message("AI rate limit reached, please try again later")],
@@ -60,7 +68,7 @@ export const aiLimiter = rateLimit({
 
 export const exportLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 10,
+  max: 10 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
   message: [message("Export limit reached for this hour")],

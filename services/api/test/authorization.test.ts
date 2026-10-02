@@ -348,6 +348,76 @@ describe("secretary and portal boundaries", () => {
     expect(fhir.status).toBe(403);
   });
 
+  it("never serves full patient PHI to the secretary (SEC-001)", async () => {
+    await login("secretary", "authsecretary");
+    // Seed contact PHI first so a leak would be observable in the payload.
+    const seed = await request(app)
+      .put(`/api/v1/patients/${ids.p1}`)
+      .set(authHeaders("admin"))
+      .send({ phone: "+41449990011", email: "cared.patient@example.ch", address: "Musterstrasse 1, 8001 Zurich", birthDate: "1980-04-12" });
+    expect(seed.status).toBe(200);
+    // The full-PHI detail endpoint is clinical: the secretary gets 403 and
+    // the error body carries no contact data either.
+    const detail = await request(app).get(`/api/v1/patients/${ids.p1}`).set(authHeaders("secretary"));
+    expect(detail.status).toBe(403);
+    expect(detail.body.code).toBe("DIRECTORY_ONLY");
+    const bodyText = JSON.stringify(detail.body);
+    expect(bodyText).not.toContain("+41449990011");
+    expect(bodyText).not.toContain("cared.patient@example.ch");
+    expect(bodyText).not.toContain("1980-04-12");
+    // The directory projection returns scheduling-grade fields only.
+    const directory = await request(app).get(`/api/v1/patients/${ids.p1}/directory`).set(authHeaders("secretary"));
+    expect(directory.status).toBe(200);
+    expect(directory.body.internalRef).toBe("P-900001");
+    expect(directory.body.fullName).toBe("Cared Patient");
+    for (const forbidden of ["phone", "email", "address", "birthDate", "identifiers", "consents", "birthDateEnc"]) {
+      expect(directory.body).not.toHaveProperty(forbidden);
+    }
+    expect(JSON.stringify(directory.body)).not.toContain("+41449990011");
+    expect(JSON.stringify(directory.body)).not.toContain("cared.patient@example.ch");
+  });
+
+  it("rejects secretary writes on contact PHI, identifiers and consents (SEC-001)", async () => {
+    await login("secretary", "authsecretary");
+    const phiUpdate = await request(app)
+      .put(`/api/v1/patients/${ids.p1}`)
+      .set(authHeaders("secretary"))
+      .send({ phone: "+41449990099" });
+    expect(phiUpdate.status).toBe(403);
+    expect(phiUpdate.body.code).toBe("FORBIDDEN");
+    const identifier = await request(app)
+      .post(`/api/v1/patients/${ids.p1}/identifiers`)
+      .set(authHeaders("secretary"))
+      .send({ type: "PASSPORT", value: "X1234567" });
+    expect(identifier.status).toBe(403);
+    const consent = await request(app)
+      .put(`/api/v1/patients/${ids.p1}/consents`)
+      .set(authHeaders("secretary"))
+      .send({ type: "DATA_SHARING", status: "GRANTED" });
+    expect(consent.status).toBe(403);
+    const create = await request(app)
+      .post("/api/v1/patients")
+      .set(authHeaders("secretary"))
+      .send({ fullName: "Blocked Patient", phone: "+41441111111" });
+    expect(create.status).toBe(403);
+  });
+
+  it("still allows directory-grade secretary updates on the same record", async () => {
+    await login("secretary", "authsecretary");
+    const ok = await request(app)
+      .put(`/api/v1/patients/${ids.p2}`)
+      .set(authHeaders("secretary"))
+      .send({ status: "INACTIVE" });
+    expect(ok.status).toBe(200);
+    expect(ok.body.status).toBe("INACTIVE");
+    expect(ok.body).not.toHaveProperty("phone");
+    const restore = await request(app)
+      .put(`/api/v1/patients/${ids.p2}`)
+      .set(authHeaders("secretary"))
+      .send({ status: "ACTIVE" });
+    expect(restore.status).toBe(200);
+  });
+
   it("keeps the portal user self-scoped and out of staff directories", async () => {
     await login("portal", "authportal");
     const ownDetail = await request(app).get(`/api/v1/patients/${ids.p1}`).set(authHeaders("portal"));
@@ -470,6 +540,299 @@ describe("AI consent fail-closed gate", () => {
       .send({ encounterId: encounter.body.id });
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("CONSENT_REQUIRED");
+  });
+});
+
+describe("AI draft insert and discard authorization (SEC-002)", () => {
+  const makeDraft = async (encounterId: string, patientId: string) => {
+    const draft = await withTenant({ clinicId: CLINIC, actorId: ids.doctor, actorRole: "DOCTOR" }, async (tx) =>
+      tx.aiDraft.create({
+        data: {
+          clinicId: CLINIC,
+          encounterId,
+          patientId,
+          authorId: ids.doctor,
+          type: "SCRIBE_NOTE",
+          content: { chiefComplaint: "cough", observations: "three days", plan: "rest" },
+          model: "test-model",
+          promptVersion: "v1",
+          reviewState: "PENDING",
+        },
+      }),
+    );
+    return draft.id;
+  };
+
+  const makeCaredEncounter = async () => {
+    const encounter = await request(app)
+      .post("/api/v1/encounters")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p1, title: "Draft authorization check" });
+    expect(encounter.status).toBe(201);
+    return encounter.body.id as string;
+  };
+
+  it("blocks insert by a doctor outside the care team", async () => {
+    await login("outsider", "authoutsider");
+    const encounterId = await makeCaredEncounter();
+    const draftId = await makeDraft(encounterId, ids.p1);
+    const res = await request(app).post(`/api/v1/ai/drafts/${draftId}/insert`).set(authHeaders("outsider"));
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("CARE_RELATIONSHIP_REQUIRED");
+    const untouched = await withTenant({ clinicId: CLINIC, actorId: "tester", actorRole: "ADMIN" }, async (tx) => {
+      const d = await tx.aiDraft.findFirst({ where: { clinicId: CLINIC, id: draftId } });
+      const e = await tx.encounter.findFirst({ where: { clinicId: CLINIC, id: encounterId } });
+      return { state: d?.reviewState, plan: e?.plan };
+    });
+    expect(untouched.state).toBe("PENDING");
+    expect(untouched.plan).toBeNull();
+  });
+
+  it("blocks discard by a doctor outside the care team", async () => {
+    await login("outsider", "authoutsider");
+    const encounterId = await makeCaredEncounter();
+    const draftId = await makeDraft(encounterId, ids.p1);
+    const res = await request(app).post(`/api/v1/ai/drafts/${draftId}/discard`).set(authHeaders("outsider"));
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("CARE_RELATIONSHIP_REQUIRED");
+    const state = await withTenant({ clinicId: CLINIC, actorId: "tester", actorRole: "ADMIN" }, async (tx) => {
+      const d = await tx.aiDraft.findFirst({ where: { clinicId: CLINIC, id: draftId } });
+      return d?.reviewState;
+    });
+    expect(state).toBe("PENDING");
+  });
+
+  it("blocks insert by an administrator without break-glass", async () => {
+    await login("admin", "authadmin");
+    const encounterId = await makeCaredEncounter();
+    const draftId = await makeDraft(encounterId, ids.p1);
+    const res = await request(app).post(`/api/v1/ai/drafts/${draftId}/insert`).set(authHeaders("admin"));
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("BREAK_GLASS_REQUIRED");
+  });
+
+  it("blocks discard by an administrator without break-glass", async () => {
+    await login("admin", "authadmin");
+    const encounterId = await makeCaredEncounter();
+    const draftId = await makeDraft(encounterId, ids.p1);
+    const res = await request(app).post(`/api/v1/ai/drafts/${draftId}/discard`).set(authHeaders("admin"));
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("BREAK_GLASS_REQUIRED");
+  });
+
+  it("never lets a secretary insert or discard drafts", async () => {
+    await login("secretary", "authsecretary");
+    const encounterId = await makeCaredEncounter();
+    const draftId = await makeDraft(encounterId, ids.p1);
+    const insert = await request(app).post(`/api/v1/ai/drafts/${draftId}/insert`).set(authHeaders("secretary"));
+    expect(insert.status).toBe(403);
+    const discard = await request(app).post(`/api/v1/ai/drafts/${draftId}/discard`).set(authHeaders("secretary"));
+    expect(discard.status).toBe(403);
+  });
+
+  it("lets the treating doctor insert and discard within the care team", async () => {
+    await login("doctor", "authdoctor");
+    const encounterId = await makeCaredEncounter();
+    const draftId = await makeDraft(encounterId, ids.p1);
+    const insert = await request(app).post(`/api/v1/ai/drafts/${draftId}/insert`).set(authHeaders("doctor"));
+    expect(insert.status).toBe(200);
+    const inserted = await withTenant({ clinicId: CLINIC, actorId: "tester", actorRole: "ADMIN" }, async (tx) => {
+      const d = await tx.aiDraft.findFirst({ where: { clinicId: CLINIC, id: draftId } });
+      const e = await tx.encounter.findFirst({ where: { clinicId: CLINIC, id: encounterId } });
+      return { state: d?.reviewState, plan: e?.plan };
+    });
+    expect(inserted.state).toBe("INSERTED");
+    expect(inserted.plan).toBe("rest");
+  });
+});
+
+describe("clinical amendment lifecycle (CLIN-002)", () => {
+  const signOriginal = async (): Promise<{ originalId: string; amendmentId: string }> => {
+    await login("doctor", "authdoctor");
+    const created = await request(app)
+      .post("/api/v1/encounters")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p1, title: "Amendment source", chiefComplaint: "initial complaint" });
+    expect(created.status).toBe(201);
+    const originalId = created.body.id as string;
+    const submit = await request(app).post(`/api/v1/encounters/${originalId}/submit`).set(authHeaders("doctor"));
+    expect(submit.status).toBe(200);
+    const sign = await request(app).post(`/api/v1/encounters/${originalId}/sign`).set(authHeaders("doctor"));
+    expect(sign.status).toBe(200);
+    return { originalId, amendmentId: "" };
+  };
+
+  it("runs the full cycle: sign, amend as draft, edit, submit, sign, supersede", async () => {
+    const { originalId } = await signOriginal();
+    // The signed original is immutable.
+    const editOriginal = await request(app)
+      .put(`/api/v1/encounters/${originalId}`)
+      .set(authHeaders("doctor"))
+      .send({ observations: "should not land" });
+    expect(editOriginal.status).toBe(409);
+
+    // Amend: the correction opens as a DRAFT linked to the original.
+    const amend = await request(app)
+      .post(`/api/v1/encounters/${originalId}/amend`)
+      .set(authHeaders("doctor"))
+      .send({ reason: "wrong laterality documented in the initial note" });
+    expect(amend.status).toBe(201);
+    const amendmentId = amend.body.id as string;
+    expect(amend.body.status).toBe("DRAFT");
+    expect(amend.body.amendedFromId).toBe(originalId);
+
+    // The original is still the authoritative signed note.
+    const stillSigned = await request(app).get(`/api/v1/encounters/${originalId}`).set(authHeaders("doctor"));
+    expect(stillSigned.body.status).toBe("SIGNED");
+
+    // The amendment draft is editable and versioned.
+    const edit = await request(app)
+      .put(`/api/v1/encounters/${amendmentId}`)
+      .set(authHeaders("doctor"))
+      .send({ observations: "corrected laterality, left side", changeReason: "correction entered" });
+    expect(edit.status).toBe(200);
+    expect(edit.body.currentVersion).toBe(2);
+
+    // Review cycle on the amendment, then signature.
+    const submit = await request(app).post(`/api/v1/encounters/${amendmentId}/submit`).set(authHeaders("doctor"));
+    expect(submit.status).toBe(200);
+    const sign = await request(app).post(`/api/v1/encounters/${amendmentId}/sign`).set(authHeaders("doctor"));
+    expect(sign.status).toBe(200);
+    expect(sign.body.status).toBe("SIGNED");
+
+    // Signing the amendment supersedes the original transactionally.
+    const original = await request(app).get(`/api/v1/encounters/${originalId}`).set(authHeaders("doctor"));
+    expect(original.body.status).toBe("AMENDED");
+
+    // Both versions of the amendment exist with their reasons.
+    const versions = await request(app).get(`/api/v1/encounters/${amendmentId}/versions`).set(authHeaders("doctor"));
+    expect(versions.body.items).toHaveLength(2);
+    expect(versions.body.items[0].version).toBe(1);
+    expect(versions.body.items[1].snapshot.observations).toBe("corrected laterality, left side");
+  });
+
+  it("rejects a second concurrent amendment while one draft is open", async () => {
+    const { originalId } = await signOriginal();
+    const first = await request(app)
+      .post(`/api/v1/encounters/${originalId}/amend`)
+      .set(authHeaders("doctor"))
+      .send({ reason: "first amendment draft for documentation error" });
+    expect(first.status).toBe(201);
+    const second = await request(app)
+      .post(`/api/v1/encounters/${originalId}/amend`)
+      .set(authHeaders("doctor"))
+      .send({ reason: "second amendment attempt while the first is open" });
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe("CONFLICT");
+  });
+
+  it("rejects amendments without a specific reason", async () => {
+    const { originalId } = await signOriginal();
+    const amend = await request(app)
+      .post(`/api/v1/encounters/${originalId}/amend`)
+      .set(authHeaders("doctor"))
+      .send({ reason: "short" });
+    expect(amend.status).toBe(400);
+  });
+});
+
+describe("clinical write entity validation (CLIN-001)", () => {
+  let caredEncounterId = "";
+  let otherEncounterId = "";
+
+  beforeAll(async () => {
+    await login("doctor", "authdoctor");
+    const own = await request(app)
+      .post("/api/v1/encounters")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p1, title: "Own encounter for writes" });
+    expect(own.status).toBe(201);
+    caredEncounterId = own.body.id;
+    const other = await request(app)
+      .post("/api/v1/encounters")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p2, title: "Other patient encounter" });
+    expect(other.status).toBe(201);
+    otherEncounterId = other.body.id;
+  });
+
+  it("rejects an observation whose encounter belongs to another patient", async () => {
+    const res = await request(app)
+      .post("/api/v1/observations")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p1, encounterId: otherEncounterId, type: "PULSE", value: "72" });
+    expect(res.status).toBe(422);
+    const stored = await withTenant({ clinicId: CLINIC, actorId: "tester", actorRole: "ADMIN" }, async (tx) =>
+      tx.observation.count({ where: { clinicId: CLINIC, patientId: ids.p1, encounterId: otherEncounterId } }),
+    );
+    expect(stored).toBe(0);
+  });
+
+  it("rejects a problem whose encounter belongs to another patient", async () => {
+    const res = await request(app)
+      .post("/api/v1/problems")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p2, encounterId: caredEncounterId, codingSystem: "ICD_10", code: "J45", display: "Asthma" });
+    expect(res.status).toBe(422);
+  });
+
+  it("rejects a medication whose encounter belongs to another patient", async () => {
+    const res = await request(app)
+      .post("/api/v1/medications")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p1, encounterId: otherEncounterId, medicationName: "Amoxicillin" });
+    expect(res.status).toBe(422);
+  });
+
+  it("rejects an encounter reference from an unknown clinic", async () => {
+    const res = await request(app)
+      .post("/api/v1/observations")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p1, encounterId: "00000000-0000-4000-8000-000000000000", type: "PULSE", value: "70" });
+    expect(res.status).toBe(404);
+  });
+
+  it("allows a linked observation when the encounter matches the patient", async () => {
+    const res = await request(app)
+      .post("/api/v1/observations")
+      .set(authHeaders("doctor"))
+      .send({ patientId: ids.p1, encounterId: caredEncounterId, type: "PULSE", value: "74" });
+    expect(res.status).toBe(201);
+    expect(res.body.encounterId).toBe(caredEncounterId);
+  });
+
+  it("rejects invalid medication state jumps and stamps the reviewing clinician server-side", async () => {
+    const created = await request(app)
+      .post("/api/v1/medications")
+      .set(authHeaders("doctor"))
+      // A client-sent reviewer id must be ignored end to end.
+      .send({ patientId: ids.p1, medicationName: "Ibuprofen", reviewedById: ids.admin });
+    expect(created.status).toBe(201);
+    const orderId = created.body.id as string;
+    expect(created.body.status).toBe("DRAFT");
+
+    const jump = await request(app)
+      .patch(`/api/v1/medications/${orderId}/status`)
+      .set(authHeaders("doctor"))
+      .send({ status: "COMPLETED" });
+    expect(jump.status).toBe(409);
+    expect(jump.body.code).toBe("INVALID_STATE_TRANSITION");
+
+    const activate = await request(app)
+      .patch(`/api/v1/medications/${orderId}/status`)
+      .set(authHeaders("doctor"))
+      .send({ status: "ACTIVE" });
+    expect(activate.status).toBe(200);
+
+    const stored = await withTenant({ clinicId: CLINIC, actorId: "tester", actorRole: "ADMIN" }, async (tx) => {
+      const m = await tx.medicationOrder.findFirst({ where: { clinicId: CLINIC, id: orderId } });
+      return { status: m?.status, reviewedById: m?.reviewedById, authoredById: m?.authoredById };
+    });
+    expect(stored.status).toBe("ACTIVE");
+    // The reviewing clinician is the activating actor, never the admin id
+    // sent by the client.
+    expect(stored.reviewedById).toBe(ids.doctor);
+    expect(stored.reviewedById).not.toBe(ids.admin);
   });
 });
 

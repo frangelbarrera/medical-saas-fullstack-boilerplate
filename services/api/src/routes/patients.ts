@@ -41,7 +41,9 @@ patientsRouter.get(
 patientsRouter.post(
   "/patients",
   authenticate,
-  capabilityGate("patients:write"),
+  // Patient registration captures contact PHI (phone, email, address,
+  // identifiers), so it requires the protected-write capability (SEC-001).
+  capabilityGate("patients:phi_write"),
   validateBody(patientCreate),
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
@@ -87,6 +89,18 @@ patientsRouter.get(
       }
     }
     assertPatientScope(ctx, id);
+
+    // SEC-001: the full-PHI detail endpoint is clinical. Roles without the
+    // protected-write capability (SECRETARY) are redirected to the governed
+    // directory projection instead of receiving decrypted fields.
+    if (!ctx.selfPatientId && !ctx.capabilities.includes("patients:phi_write")) {
+      throw new ApiError(
+        403,
+        "DIRECTORY_ONLY",
+        "This patient detail view is restricted to clinical roles",
+        "Use the directory endpoint /api/v1/patients/:id/directory for scheduling data.",
+      );
+    }
 
     const result = await withTenantRepos(ctx, async (repos) => {
       const patient = await repos.patients.findById(ctx.tenantId, id);
@@ -138,12 +152,59 @@ patientsRouter.get(
   }),
 );
 
+/**
+ * Directory projection (SEC-001): scheduling-grade data for reception roles.
+ * The repository call never decrypts PHI, and the response carries no birth
+ * date, contact field, identifier or consent - enforced by the projection.
+ */
+patientsRouter.get(
+  "/patients/:id/directory",
+  authenticate,
+  capabilityGate("patients:read"),
+  assertSelfOrStaff,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    const id = req.params.id;
+    const result = await withTenantRepos(ctx, async (repos) => {
+      const patient = await repos.patients.findDirectoryDetail(ctx.tenantId, id);
+      if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+      await repos.audit.append(ctx, {
+        action: "PATIENT_DIRECTORY_VIEWED",
+        category: "PHI",
+        subjectPatientId: id,
+        target: id,
+        purpose: "OPERATIONS",
+      });
+      return patient;
+    });
+    res.json(result);
+  }),
+);
+
+/**
+ * Field-scope write guard (SEC-001): a directory writer may change only
+ * scheduling-grade fields; any contact/identity field in the payload
+ * escalates the requirement to patients:phi_write. Runs AFTER body
+ * validation so the check sees the parsed payload only.
+ */
+const PATIENT_PHI_FIELDS = new Set(["birthDate", "sex", "phone", "email", "address"]);
+const requirePatientUpdateScope = (req: AuthedRequest, _res: unknown, next: (err?: unknown) => void): void => {
+  const ctx = req.ctx!;
+  const fields = Object.keys(req.body as object);
+  const needed: "patients:phi_write" | "patients:directory_write" =
+    fields.some((f) => PATIENT_PHI_FIELDS.has(f)) ? "patients:phi_write" : "patients:directory_write";
+  if (!ctx.capabilities.includes(needed)) {
+    return next(new ApiError(403, "FORBIDDEN", `Missing capability: ${needed}`));
+  }
+  next();
+};
+
 patientsRouter.put(
   "/patients/:id",
   authenticate,
-  capabilityGate("patients:write"),
   assertSelfOrStaff,
   validateBody(patientUpdate),
+  requirePatientUpdateScope,
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const updated = await withTenantRepos(ctx, async (repos) => {
@@ -156,6 +217,12 @@ patientsRouter.put(
         target: patient.id,
         details: { fields: Object.keys(req.body as object) },
       });
+      // Directory writers never receive the decrypted detail back (SEC-001):
+      // the response is the same governed projection they may read.
+      if (!ctx.capabilities.includes("patients:phi_write")) {
+        const directory = await repos.patients.findDirectoryDetail(ctx.tenantId, patient.id);
+        if (directory) return directory;
+      }
       return patient;
     });
     if (!updated) throw new ApiError(404, "NOT_FOUND", "Patient not found");
@@ -189,7 +256,7 @@ patientsRouter.post(
 patientsRouter.put(
   "/patients/:id/consents",
   authenticate,
-  capabilityGate("patients:write"),
+  capabilityGate("patients:phi_write"),
   assertSelfOrStaff,
   validateBody(consentUpsert),
   asyncHandler(async (req: AuthedRequest, res) => {
@@ -217,7 +284,7 @@ patientsRouter.put(
 patientsRouter.post(
   "/patients/:id/identifiers",
   authenticate,
-  capabilityGate("patients:write"),
+  capabilityGate("patients:phi_write"),
   assertSelfOrStaff,
   validateBody(patientIdentifierInput),
   asyncHandler(async (req: AuthedRequest, res) => {

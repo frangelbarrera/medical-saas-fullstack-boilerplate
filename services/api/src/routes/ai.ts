@@ -12,6 +12,7 @@ import { withTenantRepos, loadEnv } from "@medical/data";
 import { asyncHandler, ApiError } from "../middleware/errors.js";
 import { validateBody } from "../middleware/validate.js";
 import { authenticate, requireCapability, type AuthedRequest } from "../middleware/auth.js";
+import { assertClinicalAccess } from "../lib/access.js";
 import { sanitizeFreeText, GeminiProvider, DEFAULT_PROMPTS } from "@medical/integrations";
 import { aiLimiter } from "../middleware/security.js";
 export const aiRouter = Router();
@@ -108,6 +109,8 @@ aiRouter.post(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const updated = await withTenantRepos(ctx, async (repos) => {
+      // Draft and encounter resolve inside the same transaction, so the
+      // authorization decision below cannot race a concurrent state change.
       const draft = await repos.ai.findDraft(ctx.tenantId, req.params.id);
       if (!draft || draft.reviewState !== "PENDING") {
         throw new ApiError(404, "NOT_FOUND", "Draft not found or already handled");
@@ -115,6 +118,11 @@ aiRouter.post(
       if (!draft.encounterId) throw new ApiError(422, "UNPROCESSABLE", "Draft has no target encounter");
       const encounter = await repos.clinical.findById(ctx.tenantId, draft.encounterId);
       if (!encounter) throw new ApiError(404, "NOT_FOUND", "Encounter not found");
+      // SEC-002: inserting into a note is a clinical write on the encounter's
+      // patient - the full governed model applies (break-glass for admins,
+      // care team for doctors, never secretaries or portal users). Knowing a
+      // draft UUID is not authorization.
+      await assertClinicalAccess(ctx, repos, encounter.patientId);
       // Insert as DRAFT content: clinician still reviews and signs.
       await repos.clinical.updateContent(ctx, draft.encounterId, {
         chiefComplaint: draft.content.chiefComplaint,
@@ -128,6 +136,7 @@ aiRouter.post(
         category: "AI",
         subjectPatientId: encounter.patientId,
         target: req.params.id,
+        details: { encounterId: encounter.id, result: "INSERTED" },
       });
       return inserted ?? { ok: true };
     });
@@ -142,9 +151,29 @@ aiRouter.post(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const discarded = await withTenantRepos(ctx, async (repos) => {
+      const draft = await repos.ai.findDraft(ctx.tenantId, req.params.id);
+      if (!draft || draft.reviewState !== "PENDING") {
+        throw new ApiError(404, "NOT_FOUND", "Draft not found or already handled");
+      }
+      // SEC-002: discarding another team's draft changes their workflow -
+      // the same clinical relationship is required. The draft's own patient
+      // link wins when present; otherwise the encounter resolves it.
+      let patientId = draft.patientId ?? null;
+      if (!patientId && draft.encounterId) {
+        const encounter = await repos.clinical.findById(ctx.tenantId, draft.encounterId);
+        patientId = encounter?.patientId ?? null;
+      }
+      if (!patientId) throw new ApiError(404, "NOT_FOUND", "Draft not found or already handled");
+      await assertClinicalAccess(ctx, repos, patientId);
       const result = await repos.ai.setDraftState(ctx, req.params.id, "DISCARDED");
       if (result) {
-        await repos.audit.append(ctx, { action: "AI_DRAFT_DISCARDED", category: "AI", target: req.params.id });
+        await repos.audit.append(ctx, {
+          action: "AI_DRAFT_DISCARDED",
+          category: "AI",
+          subjectPatientId: patientId,
+          target: req.params.id,
+          details: { result: "DISCARDED" },
+        });
       }
       return result;
     });

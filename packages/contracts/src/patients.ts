@@ -55,6 +55,21 @@ export const patientUpdate = z.object({
 });
 export type PatientUpdate = z.infer<typeof patientUpdate>;
 
+/**
+ * Directory-only detail projection (SEC-001). The fields a scheduling or
+ * reception view needs - and nothing else: no birth date, no contact PHI,
+ * no identifiers, no consents. The API layer must serve exactly this shape
+ * to roles without patients:phi_write.
+ */
+export interface PatientDirectoryDetail {
+  id: string;
+  internalRef: string;
+  fullName: string;
+  status: (typeof PATIENT_STATUSES)[number];
+  primaryDoctorId: string | null;
+  primaryDoctorName: string | null;
+}
+
 export interface PatientDetail {
   id: string;
   internalRef: string;

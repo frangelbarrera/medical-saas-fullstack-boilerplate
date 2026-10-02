@@ -5,6 +5,7 @@
  */
 import crypto from "crypto";
 import type { Tx } from "../client.js";
+import { DomainError } from "@medical/domain";
 import type {
   ClinicalSummary,
   Encounter,
@@ -20,12 +21,46 @@ import type {
 export const ENCOUNTER_TRANSITIONS: Record<string, string[]> = {
   DRAFT: ["IN_REVIEW", "SIGNED"],
   IN_REVIEW: ["SIGNED", "DRAFT"],
-  SIGNED: ["AMENDED"],
-  AMENDED: ["AMENDED"],
+  // SIGNED notes are immutable. AMENDED is applied to the original by the
+  // amendment-signing transaction below, never by a direct user transition.
+  SIGNED: [],
+  AMENDED: [],
 };
+
+/** Prisma unique-constraint violation (Postgres SQLSTATE 23505). */
+const isUniqueViolation = (err: unknown): boolean =>
+  typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "P2002";
 
 export class ClinicalRepository {
   constructor(private tx: Tx) {}
+
+  /**
+   * Encounter/patient consistency guard (CLIN-001): every clinical write
+   * that carries an encounter reference validates, inside the caller's
+   * transaction, that the encounter exists in this clinic and belongs to the
+   * same patient. Cross-patient or cross-tenant references are rejected
+   * before any row is written.
+   */
+  private async assertEncounterInPatient(
+    clinicId: string,
+    patientId: string,
+    encounterId?: string,
+  ): Promise<void> {
+    if (!encounterId) return;
+    const encounter = await this.tx.encounter.findFirst({
+      where: { clinicId, id: encounterId },
+      select: { id: true, patientId: true },
+    });
+    if (!encounter) {
+      throw new DomainError("NOT_FOUND", "Encounter not found in this clinic");
+    }
+    if (encounter.patientId !== patientId) {
+      throw new DomainError(
+        "UNPROCESSABLE",
+        "The encounter does not belong to this patient",
+      );
+    }
+  }
 
   // ---------------------------------------------------------------- encounters
 
@@ -143,6 +178,8 @@ export class ClinicalRepository {
       include: this.include(),
     });
     if (!existing) return null;
+    // Signed and superseded notes are immutable (CLIN-002): corrections go
+    // through amend(), which opens a NEW DRAFT linked to the original.
     if (existing.status === "SIGNED" || existing.status === "AMENDED") return null;
 
     await this.tx.encounter.update({
@@ -156,7 +193,16 @@ export class ClinicalRepository {
     });
 
     const nextVersion = Math.max(0, ...existing.versions.map((v) => v.version)) + 1;
-    await this.snapshotVersion(ctx, id, nextVersion, input.changeReason);
+    // Two concurrent edits compute the same next version; the (encounter,
+    // version) unique constraint arbitrates and this surfaces as CONFLICT.
+    try {
+      await this.snapshotVersion(ctx, id, nextVersion, input.changeReason);
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new DomainError("CONFLICT", "The note was updated concurrently; reload and retry");
+      }
+      throw err;
+    }
     return this.findById(ctx.tenantId, id);
   }
 
@@ -182,33 +228,70 @@ export class ClinicalRepository {
           : {}),
       },
     });
+    // Signing an amendment supersedes the source note (CLIN-002): the
+    // original flips SIGNED -> AMENDED inside the same transaction, so a
+    // reader never sees an amendment signed while its original is still the
+    // authoritative version.
+    if (to === "SIGNED" && existing.amendedFromId) {
+      const original = await this.tx.encounter.findFirst({
+        where: { clinicId: ctx.tenantId, id: existing.amendedFromId },
+        select: { id: true, status: true },
+      });
+      if (original && original.status === "SIGNED") {
+        await this.tx.encounter.update({ where: { id: original.id }, data: { status: "AMENDED" } });
+      }
+    }
     return this.findById(ctx.tenantId, id);
   }
 
-  /** Amendment: creates a new DRAFT encounter linked to the signed original. */
+  /**
+   * Amendment (CLIN-002): the signed original stays SIGNED; a linked DRAFT
+   * opens for the correction. The original only becomes AMENDED inside the
+   * transaction that signs the amendment (see transition()).
+   */
   async amend(
     ctx: { tenantId: string; actorId: string },
     id: string,
     reason: string,
   ): Promise<Encounter | null> {
+    if (!reason || reason.trim().length === 0) {
+      throw new DomainError("UNPROCESSABLE", "An amendment requires a specific reason");
+    }
     const original = await this.findById(ctx.tenantId, id);
     if (!original || (original.status !== "SIGNED" && original.status !== "AMENDED")) return null;
+    // One open amendment per source note: the partial unique index (see the
+    // amendment lifecycle migration) arbitrates concurrent attempts, and the
+    // pre-check turns the common case into a clean CONFLICT.
+    const openAmendment = await this.tx.encounter.findFirst({
+      where: { clinicId: ctx.tenantId, amendedFromId: id, status: "DRAFT" },
+      select: { id: true },
+    });
+    if (openAmendment) {
+      throw new DomainError("CONFLICT", "An amendment draft is already open for this note");
+    }
 
     const newId = crypto.randomUUID();
-    await this.tx.encounter.create({
-      data: {
-        id: newId,
-        clinicId: ctx.tenantId,
-        patientId: original.patientId,
-        doctorId: ctx.actorId,
-        title: original.title,
-        chiefComplaint: original.chiefComplaint,
-        observations: original.observations,
-        plan: original.plan,
-        status: "AMENDED",
-        amendedFromId: original.id,
-      },
-    });
+    try {
+      await this.tx.encounter.create({
+        data: {
+          id: newId,
+          clinicId: ctx.tenantId,
+          patientId: original.patientId,
+          doctorId: ctx.actorId,
+          title: original.title,
+          chiefComplaint: original.chiefComplaint,
+          observations: original.observations,
+          plan: original.plan,
+          status: "DRAFT",
+          amendedFromId: original.id,
+        },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new DomainError("CONFLICT", "An amendment draft is already open for this note");
+      }
+      throw err;
+    }
     await this.snapshotVersion(ctx, newId, 1, `Amendment of ${original.id}: ${reason}`);
     return this.findById(ctx.tenantId, newId);
   }
@@ -264,6 +347,7 @@ export class ClinicalRepository {
     ctx: { tenantId: string; actorId: string },
     input: { patientId: string; encounterId?: string; type: string; loincCode?: string; value: string; unit?: string; effectiveAt?: string },
   ): Promise<Observation> {
+    await this.assertEncounterInPatient(ctx.tenantId, input.patientId, input.encounterId);
     const o = await this.tx.observation.create({
       data: {
         clinicId: ctx.tenantId,
@@ -323,6 +407,7 @@ export class ClinicalRepository {
     ctx: { tenantId: string; actorId: string },
     input: { patientId: string; encounterId?: string; codingSystem: string; code: string; display: string; onsetDate?: string; notes?: string },
   ): Promise<Problem> {
+    await this.assertEncounterInPatient(ctx.tenantId, input.patientId, input.encounterId);
     const p = await this.tx.problem.create({
       data: {
         clinicId: ctx.tenantId,
@@ -408,6 +493,8 @@ export class ClinicalRepository {
     ctx: { tenantId: string; actorId: string },
     input: { patientId: string; substance: string; category?: string; reaction?: string; severity?: string; status?: string },
   ): Promise<Allergy> {
+    // Allergies carry no encounter reference; the patient/tenant scope is
+    // asserted by the caller (assertClinicalAccess + RLS).
     const a = await this.tx.allergy.create({
       data: {
         clinicId: ctx.tenantId,
@@ -459,8 +546,12 @@ export class ClinicalRepository {
 
   async addMedicationOrder(
     ctx: { tenantId: string; actorId: string },
-    input: { patientId: string; encounterId?: string; medicationName: string; dose?: string; route?: string; frequency?: string; durationDays?: number; instructions?: string; reviewedById?: string },
+    input: { patientId: string; encounterId?: string; medicationName: string; dose?: string; route?: string; frequency?: string; durationDays?: number; instructions?: string },
   ): Promise<MedicationOrder> {
+    await this.assertEncounterInPatient(ctx.tenantId, input.patientId, input.encounterId);
+    // The reviewing clinician is never client-supplied (CLIN-001): the
+    // server stamps reviewedById when an authorized clinician activates the
+    // order (see setMedicationStatus).
     const m = await this.tx.medicationOrder.create({
       data: {
         clinicId: ctx.tenantId,
@@ -474,7 +565,6 @@ export class ClinicalRepository {
         instructions: input.instructions,
         status: "DRAFT",
         authoredById: ctx.actorId,
-        reviewedById: input.reviewedById,
       },
       include: { authoredBy: { select: { fullName: true } } },
     });
@@ -490,15 +580,29 @@ export class ClinicalRepository {
     return rows.map((m) => this.medicationDto(m));
   }
 
-  async setMedicationStatus(clinicId: string, id: string, status: string, reviewedById?: string): Promise<MedicationOrder | null> {
+  /** Valid medication order transitions (CLIN-001): no state jumps. */
+  async setMedicationStatus(clinicId: string, id: string, status: string, reviewerId?: string): Promise<MedicationOrder | null> {
     const existing = await this.tx.medicationOrder.findFirst({ where: { clinicId, id } });
     if (!existing) return null;
+    const allowed: Record<string, string[]> = {
+      DRAFT: ["ACTIVE", "CANCELLED"],
+      ACTIVE: ["COMPLETED", "CANCELLED"],
+      COMPLETED: [],
+      CANCELLED: [],
+    };
+    if (!(allowed[existing.status] ?? []).includes(status)) {
+      throw new DomainError(
+        "INVALID_STATE_TRANSITION",
+        `Cannot move a ${existing.status} medication order to ${status}`,
+      );
+    }
     const m = await this.tx.medicationOrder.update({
       where: { id },
       data: {
         status: status as never,
-        // A DRAFT order can only become ACTIVE through clinician review:
-        reviewedById: status === "ACTIVE" ? reviewedById ?? existing.reviewedById : existing.reviewedById,
+        // Server-side review stamp: the activating clinician is the actor
+        // from the request context, never a client-provided id.
+        reviewedById: status === "ACTIVE" ? reviewerId ?? existing.reviewedById : existing.reviewedById,
       },
       include: { authoredBy: { select: { fullName: true } } },
     });

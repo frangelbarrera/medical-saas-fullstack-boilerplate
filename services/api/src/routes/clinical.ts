@@ -21,51 +21,9 @@ import { assertTransition, canEditContent, assertPatientScope } from "@medical/d
 import { asyncHandler, ApiError } from "../middleware/errors.js";
 import { validateBody } from "../middleware/validate.js";
 import { authenticate, requireCapability, type AuthedRequest } from "../middleware/auth.js";
+import { assertClinicalAccess } from "../lib/access.js";
 
 export const clinicalRouter = Router();
-
-/**
- * Policy (CLIN-003 / CLIN-004): clinical PHI is reachable only through a
- * governed path - never through bare capabilities.
- *   ADMIN:     requires an active, audited break-glass window.
- *   DOCTOR:    requires an ACTIVE care-team membership or the primary-doctor
- *              assignment (CARE_RELATIONSHIP_REQUIRED otherwise).
- *   SECRETARY: never reaches the clinical record (directory + scheduling only).
- *   PATIENT:   portal users are self-scoped via assertPatientScope upstream.
- */
-const assertClinicalAccess = async (
-  ctx: NonNullable<AuthedRequest["ctx"]>,
-  repos: import("@medical/data").Repositories,
-  patientId: string,
-): Promise<void> => {
-  if (ctx.actorRole === "ADMIN") {
-    const granted = await repos.clinical.hasActiveBreakGlass(ctx.tenantId, ctx.actorId, patientId);
-    if (!granted) {
-      throw new ApiError(
-        403,
-        "BREAK_GLASS_REQUIRED",
-        "This clinical record requires a justified break-glass access",
-        "Provide a reason to open the record under emergency access. The access is logged and expires after 30 minutes.",
-      );
-    }
-    return;
-  }
-  if (ctx.actorRole === "DOCTOR") {
-    const related = await repos.clinical.hasCareRelationship(ctx.tenantId, ctx.actorId, patientId);
-    if (!related) {
-      throw new ApiError(
-        403,
-        "CARE_RELATIONSHIP_REQUIRED",
-        "You are not part of this patient's care team",
-        "Ask the treating clinician or an administrator to add you to the care team. The assignment is audited.",
-      );
-    }
-    return;
-  }
-  if (ctx.actorRole !== "PATIENT") {
-    throw new ApiError(403, "FORBIDDEN", "This role cannot access clinical records");
-  }
-};
 
 /** Patients (portal) can only read their own clinical data. */
 const scopeFilter = <T extends { patientId?: string }>(ctx: AuthedRequest["ctx"], items: T[]): T[] =>
