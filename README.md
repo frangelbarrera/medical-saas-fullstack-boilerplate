@@ -122,3 +122,7 @@ break-glass). Deployment options: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+## Compliance scope
+
+See [docs/compliance-scope.md](docs/compliance-scope.md).
