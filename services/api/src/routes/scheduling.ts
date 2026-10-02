@@ -22,6 +22,9 @@ const rangeQuery = z.object({
   doctorId: z.string().uuid().optional(),
 });
 
+/** Largest agenda window a client may request at once (SCH-001). */
+const MAX_RANGE_DAYS = 62;
+
 schedulingRouter.get(
   "/appointments",
   authenticate,
@@ -30,8 +33,16 @@ schedulingRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const q = (req as typeof req & { validatedQuery: z.infer<typeof rangeQuery> }).validatedQuery;
+    const from = new Date(q.from);
+    const to = new Date(q.to);
+    if (!(from < to)) {
+      throw new ApiError(400, "VALIDATION_FAILED", "The range end must be after its start");
+    }
+    if (to.getTime() - from.getTime() > MAX_RANGE_DAYS * 24 * 3600 * 1000) {
+      throw new ApiError(400, "VALIDATION_FAILED", `The range must not exceed ${MAX_RANGE_DAYS} days`);
+    }
     const appointments = await withTenantRepos(ctx, (repos) =>
-      repos.scheduling.listRange(ctx.tenantId, new Date(q.from), new Date(q.to), q.doctorId),
+      repos.scheduling.listRange(ctx.tenantId, from, to, q.doctorId),
     );
     res.json({ items: appointments });
   }),
@@ -46,6 +57,14 @@ schedulingRouter.post(
     const ctx = req.ctx!;
     const input = req.body as ReturnType<typeof appointmentCreate.parse>;
     const created = await withTenantRepos(ctx, async (repos) => {
+      // The practitioner must be an ACTIVE doctor of this clinic (SCH-004):
+      // a known user id of a secretary, an inactive doctor or a user from
+      // another clinic is never bookable.
+      const doctor = await repos.users.findById(ctx.tenantId, input.doctorId);
+      if (!doctor) throw new ApiError(404, "NOT_FOUND", "Doctor not found");
+      if (doctor.role !== "DOCTOR" || !doctor.isActive) {
+        throw new ApiError(422, "UNPROCESSABLE", "The selected practitioner is not an active doctor in this clinic");
+      }
       // Overlap validation (audit: appointment with overlap check).
       const start = new Date(input.startTime);
       const end = new Date(start.getTime() + input.durationMinutes * 60000);

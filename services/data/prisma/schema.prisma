@@ -272,6 +272,7 @@ model User {
   notifications     Notification[]
   availabilityRules AvailabilityRule[]
   breakGlassAccesses BreakGlassAccess[]
+  reviewedBreakGlass BreakGlassAccess[] @relation("BreakGlassReviewer")
 
   @@index([clinicId])
   @@map("users")
@@ -604,12 +605,18 @@ model BreakGlassAccess {
   reason    String
   grantedAt DateTime @default(now()) @map("granted_at")
   expiresAt DateTime @map("expires_at")
+  /// Post-use review by the privacy owner (BG-001): every emergency access
+  /// must be reviewed; the full justification stays in this protected row.
+  reviewedById String?   @map("reviewed_by_id")
+  reviewedAt   DateTime? @map("reviewed_at")
 
-  clinic  Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  actor   User    @relation(fields: [actorId], references: [id], onDelete: Cascade)
-  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinic    Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  actor     User    @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  reviewedBy User?  @relation("BreakGlassReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
 
   @@index([clinicId, actorId, expiresAt])
+  @@index([clinicId, reviewedAt])
   @@map("break_glass_accesses")
 }
 

@@ -643,20 +643,28 @@ export class ClinicalRepository {
 
   // ---------------------------------------------------------------- break-glass
 
+  /**
+   * Opens a 30-minute emergency window (CLIN-003). The full justification
+   * is stored ONLY here - a protected row readable through DSAR exports and
+   * the review flow - while general audit events keep the reason length.
+   */
   async breakGlass(
     ctx: { tenantId: string; actorId: string },
     patientId: string,
     reason: string,
-  ): Promise<void> {
-    await this.tx.breakGlassAccess.create({
+  ): Promise<{ id: string; expiresAt: Date }> {
+    const expiresAt = new Date(Date.now() + 30 * 60000); // 30-minute window
+    const created = await this.tx.breakGlassAccess.create({
       data: {
         clinicId: ctx.tenantId,
         actorId: ctx.actorId,
         patientId,
         reason,
-        expiresAt: new Date(Date.now() + 30 * 60000), // 30-minute window
+        expiresAt,
       },
+      select: { id: true, expiresAt: true },
     });
+    return created;
   }
 
   async hasActiveBreakGlass(clinicId: string, actorId: string, patientId: string): Promise<boolean> {
@@ -665,6 +673,72 @@ export class ClinicalRepository {
       select: { id: true },
     });
     return Boolean(bg);
+  }
+
+  /** Number of currently open windows for one actor (BG-001 session cap). */
+  async countActiveForActor(clinicId: string, actorId: string): Promise<number> {
+    return this.tx.breakGlassAccess.count({
+      where: { clinicId, actorId, expiresAt: { gt: new Date() } },
+    });
+  }
+
+  /** Grants by this actor inside the anti-abuse window (BG-001 rate cap). */
+  async countRecentForActor(clinicId: string, actorId: string, since: Date): Promise<number> {
+    return this.tx.breakGlassAccess.count({
+      where: { clinicId, actorId, grantedAt: { gte: since } },
+    });
+  }
+
+  /** Immediate revocation: every open window of the actor closes now. */
+  async revokeActive(clinicId: string, actorId: string, patientId?: string): Promise<number> {
+    const result = await this.tx.breakGlassAccess.updateMany({
+      where: {
+        clinicId,
+        actorId,
+        ...(patientId ? { patientId } : {}),
+        expiresAt: { gt: new Date() },
+      },
+      data: { expiresAt: new Date() },
+    });
+    return result.count;
+  }
+
+  /** Unreviewed grants, newest first - the privacy owner's worklist. */
+  async listPendingReview(clinicId: string): Promise<
+    { id: string; actorId: string; actorName: string; patientId: string; reason: string; grantedAt: string; expiresAt: string; active: boolean }[]
+  > {
+    const rows = await this.tx.breakGlassAccess.findMany({
+      where: { clinicId, reviewedAt: null },
+      orderBy: { grantedAt: "desc" },
+      take: 100,
+      include: { actor: { select: { fullName: true } } },
+    });
+    const now = new Date();
+    return rows.map((r) => ({
+      id: r.id,
+      actorId: r.actorId,
+      actorName: r.actor.fullName,
+      patientId: r.patientId,
+      reason: r.reason,
+      grantedAt: r.grantedAt.toISOString(),
+      expiresAt: r.expiresAt.toISOString(),
+      active: r.expiresAt > now,
+    }));
+  }
+
+  /** Post-use review stamp (BG-001); idempotent for already-reviewed rows. */
+  async markReviewed(clinicId: string, accessId: string, reviewerId: string): Promise<boolean> {
+    const existing = await this.tx.breakGlassAccess.findFirst({
+      where: { clinicId, id: accessId },
+      select: { id: true, reviewedAt: true },
+    });
+    if (!existing) return false;
+    if (existing.reviewedAt) return true;
+    await this.tx.breakGlassAccess.update({
+      where: { id: accessId },
+      data: { reviewedAt: new Date(), reviewedById: reviewerId },
+    });
+    return true;
   }
 
   // ------------------------------------------------------------------ care team

@@ -436,6 +436,11 @@ clinicalRouter.post(
 
 // ---------------------------------------------------------------- break-glass
 
+/** Anti-abuse caps (BG-001): concurrent windows and grants per 24h. */
+const BG_ACTIVE_LIMIT = Number(process.env.BREAK_GLASS_ACTIVE_LIMIT ?? 2);
+const BG_DAILY_LIMIT = Number(process.env.BREAK_GLASS_DAILY_LIMIT ?? 10);
+const BG_ALERT_THRESHOLD = 3;
+
 clinicalRouter.post(
   "/break-glass",
   authenticate,
@@ -447,18 +452,115 @@ clinicalRouter.post(
     const granted = await withTenantRepos(ctx, async (repos) => {
       const exists = await repos.patients.exists(ctx.tenantId, patientId);
       if (!exists) throw new ApiError(404, "NOT_FOUND", "Patient not found");
-      await repos.clinical.breakGlass(ctx, patientId, reason);
+
+      // BG-001: an actor cannot keep many emergency windows open at once,
+      // and cannot hammer the mechanism all day.
+      const active = await repos.clinical.countActiveForActor(ctx.tenantId, ctx.actorId);
+      if (active >= BG_ACTIVE_LIMIT) {
+        await repos.audit.append(ctx, {
+          action: "BREAK_GLASS_LIMIT_BLOCKED",
+          category: "PHI",
+          subjectPatientId: patientId,
+          target: patientId,
+          purpose: "EMERGENCY",
+          details: { limit: "ACTIVE_WINDOWS", active },
+        });
+        throw new ApiError(429, "RATE_LIMITED", "Emergency access windows are already open; close or let them expire first");
+      }
+      const since = new Date(Date.now() - 24 * 3600 * 1000);
+      const recent = await repos.clinical.countRecentForActor(ctx.tenantId, ctx.actorId, since);
+      if (recent >= BG_DAILY_LIMIT) {
+        await repos.audit.append(ctx, {
+          action: "BREAK_GLASS_LIMIT_BLOCKED",
+          category: "PHI",
+          subjectPatientId: patientId,
+          target: patientId,
+          purpose: "EMERGENCY",
+          details: { limit: "DAILY_RATE", recent },
+        });
+        throw new ApiError(429, "RATE_LIMITED", "Daily emergency access limit reached; the privacy owner has been notified");
+      }
+
+      const window = await repos.clinical.breakGlass(ctx, patientId, reason);
+      const repeatedUse = recent + 1 >= BG_ALERT_THRESHOLD;
       await repos.audit.append(ctx, {
         action: "BREAK_GLASS_USED",
         category: "PHI",
         subjectPatientId: patientId,
         target: patientId,
         purpose: "EMERGENCY",
-        details: { reasonLength: reason.length },
+        // Length only: the full justification lives in the protected row.
+        details: { reasonLength: reason.length, accessId: window.id, repeatedUse },
       });
-      return true;
+      // The privacy owner (administrator role) is notified immediately, and
+      // repeated use of the mechanism raises its own signal.
+      await repos.messaging.notifyClinicAdmins(ctx.tenantId, {
+        category: "BREAK_GLASS",
+        subject: repeatedUse ? "Repeated emergency access" : "Emergency access opened",
+        body: repeatedUse
+          ? "An administrator has opened multiple emergency access windows in the last 24 hours. Post-use review is required."
+          : "An administrator opened an emergency access window. Post-use review is required.",
+      });
+      return { id: window.id, expiresAt: window.expiresAt.toISOString() };
     });
-    res.json({ ok: granted, expiresInMinutes: 30 });
+    res.json({ ok: true, accessId: granted.id, expiresInMinutes: 30, expiresAt: granted.expiresAt });
+  }),
+);
+
+/** Immediate revocation of the actor's own open window (BG-001). */
+clinicalRouter.delete(
+  "/break-glass",
+  authenticate,
+  requireCapability("clinical:break_glass"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    const revoked = await withTenantRepos(ctx, async (repos) => {
+      const count = await repos.clinical.revokeActive(ctx.tenantId, ctx.actorId);
+      if (count > 0) {
+        await repos.audit.append(ctx, {
+          action: "BREAK_GLASS_REVOKED",
+          category: "PHI",
+          details: { windowsClosed: count },
+        });
+      }
+      return count;
+    });
+    res.json({ ok: true, windowsClosed: revoked });
+  }),
+);
+
+/** Privacy owner worklist: emergency accesses awaiting review (BG-001). */
+clinicalRouter.get(
+  "/break-glass/pending-review",
+  authenticate,
+  requireCapability("admin:clinic"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    const items = await withTenantRepos(ctx, (repos) => repos.clinical.listPendingReview(ctx.tenantId));
+    res.json({ items });
+  }),
+);
+
+clinicalRouter.post(
+  "/break-glass/:accessId/review",
+  authenticate,
+  requireCapability("admin:clinic"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    const ok = await withTenantRepos(ctx, async (repos) => {
+      const done = await repos.clinical.markReviewed(ctx.tenantId, req.params.accessId, ctx.actorId);
+      if (done) {
+        await repos.audit.append(ctx, {
+          action: "BREAK_GLASS_REVIEWED",
+          category: "ADMIN",
+          target: req.params.accessId,
+          details: { reviewerId: ctx.actorId },
+        });
+      }
+      return done;
+    });
+    if (!ok) throw new ApiError(404, "NOT_FOUND", "Emergency access record not found");
+    res.json({ ok: true });
   }),
 );
 

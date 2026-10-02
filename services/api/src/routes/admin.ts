@@ -8,10 +8,10 @@ import {
   clinicUpdate,
   compliancePackFor,
 } from "@medical/contracts";
-import { withTenant, withTenantRepos, prisma } from "@medical/data";
+import { withTenant, withTenantRepos, prisma, authRepo } from "@medical/data";
 import { asyncHandler, ApiError } from "../middleware/errors.js";
 import { validateBody } from "../middleware/validate.js";
-import { authenticate, requireCapability, type AuthedRequest } from "../middleware/auth.js";
+import { authenticate, requireCapability, requireRecentStepUp, type AuthedRequest } from "../middleware/auth.js";
 
 export const adminRouter = Router();
 
@@ -35,11 +35,26 @@ adminRouter.get(
   }),
 );
 
+/**
+ * Creating or elevating an administrator is a sensitive administrative
+ * operation (ADM-001): it requires the 5-minute step-up window opened by a
+ * fresh re-authentication, not just a valid session.
+ */
+const requireStepUpForAdminRole = (req: AuthedRequest, res: unknown, next: (err?: unknown) => void): void => {
+  const role = (req.body as { role?: string } | undefined)?.role;
+  if (role === "ADMIN") {
+    requireRecentStepUp(req, res as never, next);
+    return;
+  }
+  next();
+};
+
 adminRouter.post(
   "/users",
   authenticate,
   requireCapability("admin:users"),
   validateBody(userCreate),
+  requireStepUpForAdminRole,
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const created = await withTenantRepos(ctx, async (repos) => {
@@ -66,28 +81,56 @@ adminRouter.put(
   authenticate,
   requireCapability("admin:users"),
   validateBody(userUpdate),
+  requireStepUpForAdminRole,
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
+    const input = req.body as { fullName?: string; role?: string; isActive?: boolean; password?: string };
     const updated = await withTenantRepos(ctx, async (repos) => {
+      const target = await repos.users.findById(ctx.tenantId, req.params.id);
+      if (!target) throw new ApiError(404, "NOT_FOUND", "User not found");
       // Self-protection: cannot demote/deactivate yourself.
-      if (req.params.id === ctx.actorId && (req.body.role !== undefined || req.body.isActive === false)) {
+      if (req.params.id === ctx.actorId && (input.role !== undefined || input.isActive === false)) {
         throw new ApiError(422, "UNPROCESSABLE", "You cannot change your own role or deactivate yourself");
       }
-      // Keep at least one active admin per clinic.
-      if (req.body.role !== undefined && req.body.role !== "ADMIN") {
-        const admins = await repos.users.countAdmins(ctx.tenantId, req.params.id);
-        const target = await repos.users.findById(ctx.tenantId, req.params.id);
-        if (target?.role === "ADMIN" && admins === 0) {
+      // Last-admin guard (ADM-001): neither a demotion nor a deactivation
+      // may remove the only active administrator of the clinic.
+      const removesAdmin =
+        target.role === "ADMIN" &&
+        target.isActive &&
+        ((input.role !== undefined && input.role !== "ADMIN") || input.isActive === false);
+      if (removesAdmin) {
+        const remaining = await repos.users.countAdmins(ctx.tenantId, target.id);
+        if (remaining === 0) {
           throw new ApiError(422, "UNPROCESSABLE", "The clinic must keep at least one active administrator");
         }
       }
-      const user = await repos.users.update(ctx.tenantId, req.params.id, req.body);
+
+      const user = await repos.users.update(ctx.tenantId, req.params.id, input);
       if (!user) throw new ApiError(404, "NOT_FOUND", "User not found");
+
+      // Any loss of privilege or credential change invalidates every live
+      // session of the affected user, including refresh tokens (ADM-002).
+      const credentialOrPrivilegeChange =
+        input.isActive === false || input.role !== undefined || input.password !== undefined;
+      if (credentialOrPrivilegeChange) {
+        await authRepo().revokeAllForUser(user.id);
+        await repos.audit.append(ctx, {
+          action: "USER_SESSIONS_INVALIDATED",
+          category: "ADMIN",
+          target: user.id,
+        });
+      }
+
       await repos.audit.append(ctx, {
-        action: req.body.isActive === false ? "USER_DEACTIVATED" : "USER_UPDATED",
+        action: input.isActive === false ? "USER_DEACTIVATED" : "USER_UPDATED",
         category: "ADMIN",
         target: user.id,
-        details: { fields: Object.keys(req.body as object) },
+        // Before/after for the audit chain - never secrets or passwords.
+        details: {
+          fields: Object.keys(input),
+          before: { role: target.role, isActive: target.isActive },
+          after: { role: user.role, isActive: user.isActive },
+        },
       });
       return user;
     });

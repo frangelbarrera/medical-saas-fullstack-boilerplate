@@ -35,7 +35,9 @@ messagingRouter.post(
         category: "PHI",
         subjectPatientId: thread.patientId ?? undefined,
         target: thread.id,
-        details: { subject: thread.subject },
+        // Participant metadata only: message bodies never enter the audit
+        // chain (COM-001).
+        details: { subject: thread.subject, participantCount: thread.participants.length },
       });
       return thread;
     });

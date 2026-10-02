@@ -3,6 +3,7 @@
  * and self-booking availability.
  */
 import type { Tx } from "../client.js";
+import { DomainError } from "@medical/domain";
 import type {
   Appointment,
   AppointmentCreate,
@@ -56,11 +57,17 @@ export class SchedulingRepository {
     };
   }
 
+  /**
+   * Agenda range query (SCH-001): an appointment belongs to the range when
+   * it OVERLAPS it - startTime < to AND endTime > from - so a visit that
+   * started before the window but ends inside it is never hidden.
+   */
   async listRange(clinicId: string, from: Date, to: Date, doctorId?: string): Promise<Appointment[]> {
     const rows = await this.tx.appointment.findMany({
       where: {
         clinicId,
-        startTime: { gte: from, lte: to },
+        startTime: { lt: to },
+        endTime: { gt: from },
         ...(doctorId ? { doctorId } : {}),
       },
       orderBy: { startTime: "asc" },
@@ -135,6 +142,11 @@ export class SchedulingRepository {
   async update(clinicId: string, id: string, input: AppointmentUpdate): Promise<Appointment | null> {
     const existing = await this.tx.appointment.findFirst({ where: { clinicId, id } });
     if (!existing) return null;
+    // Cancelled visits are historical records (SCH-002): reinstate through a
+    // status change instead of silently moving them.
+    if (existing.status === "CANCELLED") {
+      throw new DomainError("UNPROCESSABLE", "A cancelled appointment cannot be modified");
+    }
     const start = input.startTime ? new Date(input.startTime) : existing.startTime;
     const duration =
       input.durationMinutes ??
@@ -257,15 +269,21 @@ export class SchedulingRepository {
 
   // ----- self-booking availability (PAT-002) -----
 
-  async setAvailabilityRule(clinicId: string, input: { doctorId: string; weekday: number; startMinute: number; endMinute: number }) {
+  async setAvailabilityRule(
+    clinicId: string,
+    input: { doctorId: string; weekday: number; startMinute: number; endMinute: number; validFrom?: string; validTo?: string },
+  ) {
+    const data = {
+      startMinute: input.startMinute,
+      endMinute: input.endMinute,
+      ...(input.validFrom !== undefined ? { validFrom: new Date(`${input.validFrom}T00:00:00.000Z`) } : {}),
+      ...(input.validTo !== undefined ? { validTo: new Date(`${input.validTo}T00:00:00.000Z`) } : {}),
+    };
     const existing = await this.tx.availabilityRule.findFirst({
       where: { clinicId, doctorId: input.doctorId, weekday: input.weekday },
     });
     if (existing) {
-      return this.tx.availabilityRule.update({
-        where: { id: existing.id },
-        data: { startMinute: input.startMinute, endMinute: input.endMinute },
-      });
+      return this.tx.availabilityRule.update({ where: { id: existing.id }, data });
     }
     return this.tx.availabilityRule.create({
       data: {
@@ -274,6 +292,8 @@ export class SchedulingRepository {
         weekday: input.weekday,
         startMinute: input.startMinute,
         endMinute: input.endMinute,
+        validFrom: input.validFrom ? new Date(`${input.validFrom}T00:00:00.000Z`) : null,
+        validTo: input.validTo ? new Date(`${input.validTo}T00:00:00.000Z`) : null,
       },
     });
   }
@@ -287,17 +307,33 @@ export class SchedulingRepository {
   }
 
   /**
-   * Compute open 30-minute slots for a date from availability rules minus
-   * booked appointments. Times are UTC; slot computation uses UTC days.
+   * Compute open 30-minute slots for a LOCAL CALENDAR DAY (SCH-003). Rules
+   * are matched by the clinic-local weekday, bounded by validFrom/validTo,
+   * and wall-clock minutes are converted with the clinic's IANA timezone
+   * (default Europe/Zurich) so CET/CEST transitions land on the correct
+   * UTC instants instead of fixed UTC days.
    */
   async openSlots(clinicId: string, dateISO: string): Promise<OpenSlot[]> {
-    const day = new Date(`${dateISO}T00:00:00.000Z`);
-    if (Number.isNaN(day.getTime())) return [];
-    const weekday = day.getUTCDay();
-    const dayEnd = new Date(day.getTime() + 24 * 3600 * 1000);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return [];
+    const clinic = await this.tx.clinic.findFirst({ where: { id: clinicId }, select: { timezone: true } });
+    const timezone = validTimeZone(clinic?.timezone) ? (clinic?.timezone as string) : "Europe/Zurich";
+
+    const [year, month, day] = dateISO.split("-").map(Number);
+    // The weekday of a calendar date is timezone-independent: it comes from
+    // the date string itself.
+    const weekday = new Date(`${dateISO}T00:00:00.000Z`).getUTCDay();
+    const dayStart = zonedWallToUtc(year, month, day, 0, timezone);
+    const dayEnd = zonedWallToUtc(year, month, day, 24 * 60, timezone);
 
     const rules = await this.tx.availabilityRule.findMany({
-      where: { clinicId, weekday, OR: [{ validFrom: null }, { validFrom: { lte: day } }] },
+      where: {
+        clinicId,
+        weekday,
+        AND: [
+          { OR: [{ validFrom: null }, { validFrom: { lte: dayStart } }] },
+          { OR: [{ validTo: null }, { validTo: { gte: dayStart } }] },
+        ],
+      },
       include: { doctor: { select: { id: true, fullName: true } } },
     });
     const activeDoctors = await this.tx.user.findMany({
@@ -306,8 +342,15 @@ export class SchedulingRepository {
     });
     const activeIds = new Set(activeDoctors.map((d) => d.id));
 
+    // Anything overlapping the local day blocks its slot, including a visit
+    // that started the previous evening and spills past midnight.
     const booked = await this.tx.appointment.findMany({
-      where: { clinicId, startTime: { gte: day, lt: dayEnd }, status: { notIn: ["CANCELLED"] } },
+      where: {
+        clinicId,
+        startTime: { lt: dayEnd },
+        endTime: { gt: dayStart },
+        status: { notIn: ["CANCELLED"] },
+      },
       select: { doctorId: true, startTime: true, endTime: true },
     });
 
@@ -316,7 +359,8 @@ export class SchedulingRepository {
     for (const rule of rules) {
       if (!activeIds.has(rule.doctorId)) continue;
       for (let m = rule.startMinute; m + SLOT_MIN <= rule.endMinute; m += SLOT_MIN) {
-        const start = new Date(day.getTime() + m * 60000);
+        const start = zonedWallToUtc(year, month, day, m, timezone);
+        if (start < dayStart || start >= dayEnd) continue;
         const end = new Date(start.getTime() + SLOT_MIN * 60000);
         const overlap = booked.some(
           (b) => b.doctorId === rule.doctorId && b.startTime < end && b.endTime > start,
@@ -334,3 +378,56 @@ export class SchedulingRepository {
     return slots.sort((a, b) => a.startTime.localeCompare(b.startTime));
   }
 }
+
+/** Accepts only well-formed IANA zone identifiers. */
+const validTimeZone = (zone: string | null | undefined): boolean => {
+  if (!zone) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Offset (minutes) of a zone from UTC at the given instant. */
+const zoneOffsetMinutes = (instant: Date, timeZone: string): number => {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts = dtf.formatToParts(instant);
+  const value = (type: string): number =>
+    Number(parts.find((p) => p.type === type)?.value ?? "0");
+  const asUtc = Date.UTC(
+    value("year"),
+    value("month") - 1,
+    value("day"),
+    value("hour") % 24,
+    value("minute"),
+    value("second"),
+  );
+  return Math.round((asUtc - instant.getTime()) / 60000);
+};
+
+/**
+ * Wall-clock minutes after local midnight on a calendar date -> UTC instant.
+ * Two-pass conversion keeps 02:30 CET/CEST boundary cases on the correct
+ * side of the shift.
+ */
+const zonedWallToUtc = (year: number, month: number, day: number, minutes: number, timeZone: string): Date => {
+  const naive = Date.UTC(year, month - 1, day, Math.floor(minutes / 60), minutes % 60);
+  const offsetGuess = zoneOffsetMinutes(new Date(naive), timeZone);
+  let instant = new Date(naive - offsetGuess * 60000);
+  const offsetCorrected = zoneOffsetMinutes(instant, timeZone);
+  if (offsetCorrected !== offsetGuess) {
+    instant = new Date(naive - offsetCorrected * 60000);
+  }
+  return instant;
+};

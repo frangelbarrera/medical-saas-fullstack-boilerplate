@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isoDateTime } from "./core.js";
+import { isoDate, isoDateTime } from "./core.js";
 
 // ---------------------------------------------------------------------------
 // Scheduling
@@ -94,17 +94,24 @@ export interface ReviewItem {
   critical: boolean;
 }
 
-// Self-booking (PAT-002)
+// Self-booking (PAT-002). validFrom/validTo bound the rule's lifetime in
+// the clinic's local calendar; openSlots ignores expired rules.
 export const availabilityRuleInput = z
   .object({
     doctorId: z.string().uuid(),
     weekday: z.number().int().min(0).max(6),
     startMinute: z.number().int().min(0).max(1439),
     endMinute: z.number().int().min(1).max(1440),
+    validFrom: isoDate.optional(),
+    validTo: isoDate.optional(),
   })
   .refine((v) => v.startMinute < v.endMinute, {
     path: ["endMinute"],
     message: "End must be after start",
+  })
+  .refine((v) => !v.validFrom || !v.validTo || v.validFrom <= v.validTo, {
+    path: ["validTo"],
+    message: "validTo must not precede validFrom",
   });
 export type AvailabilityRuleInput = z.infer<typeof availabilityRuleInput>;
 
