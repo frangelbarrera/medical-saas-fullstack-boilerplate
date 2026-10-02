@@ -85,11 +85,16 @@ export class BillingRepository {
   }
 
   private async nextInvoiceNumber(clinicId: string): Promise<string> {
-    // eslint-disable-next-line no-secrets/no-secrets -- SQL pattern, not a secret
-    const result = await this.tx.$queryRaw<{ next: bigint }[]>`
-      SELECT COALESCE(MAX(NULLIF(regexp_replace(number, '\\D', '', 'g'), '')::bigint), 0) + 1 AS next
-      FROM invoices WHERE clinic_id = ${clinicId} AND number ~ '^INV-[0-9]+$'`;
-    const next = Number(result[0]?.next ?? 1);
+    // BIL-002: the per-clinic counter row is bumped atomically. The ON
+    // CONFLICT UPDATE takes a row lock through the end of the transaction,
+    // so two concurrent invoices can never compute the same number; the
+    // (clinic_id, number) unique index on invoices is the backstop.
+    const result = await this.tx.$queryRaw<{ last_number: number }[]>`
+      INSERT INTO invoice_counters (clinic_id, last_number)
+      VALUES (${clinicId}, 0)
+      ON CONFLICT (clinic_id) DO UPDATE SET last_number = invoice_counters.last_number + 1
+      RETURNING last_number`;
+    const next = Number(result[0]?.last_number ?? 0) + 1;
     return `INV-${String(next).padStart(5, "0")}`;
   }
 
@@ -312,15 +317,16 @@ export class BillingRepository {
   // ------------------------------------------------------------------ webhook
 
   /**
-   * Provider-neutral webhook ingestion with enforced idempotency: the
-   * (provider, external_id) unique key makes replays return DUPLICATE.
+   * Provider-neutral webhook ingestion (BIL-001): idempotent by
+   * (provider, external_id). Only minimal metadata is persisted - payload
+   * SHA-256 hash and byte size - never the raw payload.
    */
   async recordWebhookEvent(
-    input: { provider: string; externalId: string; signatureValid: boolean; payload: unknown },
+    input: { provider: string; externalId: string; signatureValid: boolean; payloadHash?: string; sizeBytes?: number },
   ): Promise<{ status: "PROCESSED" | "REJECTED" | "DUPLICATE" }> {
     const existing = await this.tx.webhookEvent.findUnique({
-      where: { externalId: input.externalId },
-      select: { id: true },
+      where: { provider_externalId: { provider: input.provider, externalId: input.externalId } },
+      select: { id: true, status: true },
     });
     if (existing) return { status: "DUPLICATE" };
     if (!input.signatureValid) {
@@ -329,7 +335,8 @@ export class BillingRepository {
           provider: input.provider,
           externalId: input.externalId,
           signatureValid: false,
-          payload: input.payload as object,
+          payloadHash: input.payloadHash,
+          sizeBytes: input.sizeBytes,
           status: "REJECTED",
         },
       });
@@ -340,7 +347,8 @@ export class BillingRepository {
         provider: input.provider,
         externalId: input.externalId,
         signatureValid: true,
-        payload: input.payload as object,
+        payloadHash: input.payloadHash,
+        sizeBytes: input.sizeBytes,
         status: "PROCESSED",
       },
     });

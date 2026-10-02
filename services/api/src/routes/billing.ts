@@ -189,37 +189,106 @@ billingRouter.post(
 );
 
 // ---------------------------------------------------------------------------
-// Payment webhook (provider-neutral, HMAC + idempotency)
+// Payment webhook (BIL-001): HMAC over the RAW body, timestamp anti-replay,
+// idempotent (provider, external_id) inbox. Invalid events are never
+// processed as accepted, and only minimal metadata is stored.
 // ---------------------------------------------------------------------------
 
 export const webhooksRouter = Router();
+
+const WEBHOOK_MAX_BYTES = 256 * 1024;
+const WEBHOOK_REPLAY_WINDOW_MS = 5 * 60 * 1000;
 
 webhooksRouter.post(
   "/webhooks/payment",
   asyncHandler(async (req, res) => {
     const env = loadEnv();
-    const payload = req.body as Record<string, unknown>;
-    const externalId =
-      (typeof payload.id === "string" && payload.id) ||
-      (typeof payload.reference === "string" && payload.reference) ||
-      crypto.randomUUID();
-    const signature = (req.headers["x-signature"] as string | undefined) ?? "";
     const secret = env.PAYMENT_WEBHOOK_SECRET;
+    // Fail-closed: without a configured secret nothing can be verified.
+    if (!secret) {
+      throw new ApiError(503, "UNPROCESSABLE", "Payment webhooks are not configured on this deployment");
+    }
+    const raw = (req as { rawBody?: Buffer }).rawBody;
+    if (!raw || raw.length === 0) {
+      throw new ApiError(400, "VALIDATION_FAILED", "A request body is required");
+    }
+    if (raw.length > WEBHOOK_MAX_BYTES) {
+      throw new ApiError(413, "PAYLOAD_TOO_LARGE", "Webhook payload exceeds the accepted size");
+    }
 
+    // Anti-replay: the caller signs "<timestamp>.<rawBody>"; stale or
+    // future-dated requests are rejected before parsing.
+    const timestampHeader = (req.headers["x-webhook-timestamp"] as string | undefined) ?? "";
+    if (!/^\d{1,15}$/.test(timestampHeader)) {
+      throw new ApiError(401, "UNAUTHORIZED", "A numeric x-webhook-timestamp header is required");
+    }
+    const timestamp = Number(timestampHeader);
+    if (Math.abs(Date.now() - timestamp) > WEBHOOK_REPLAY_WINDOW_MS) {
+      throw new ApiError(401, "UNAUTHORIZED", "The webhook timestamp is outside the accepted window");
+    }
+    const signature = (req.headers["x-signature"] as string | undefined) ?? "";
     const signatureValid =
-      Boolean(secret) &&
       signature.length > 0 &&
-      safeHmacEqual(signature, JSON.stringify(payload), secret as string);
+      safeHmacEqual(signature, `${timestampHeader}.${raw.toString("utf8")}`, secret);
+    const payloadHash = crypto.createHash("sha256").update(raw).digest("hex");
+
+    if (!signatureValid) {
+      // Record only metadata: no payload, no identifiers taken from an
+      // unverified body.
+      await withTenantRepos({ clinicId: "system", actorId: "", actorRole: "" }, (repos) =>
+        repos.billing.recordWebhookEvent({
+          provider: "unverified",
+          externalId: payloadHash.slice(0, 16),
+          signatureValid: false,
+          payloadHash,
+          sizeBytes: raw.length,
+        }),
+      );
+      throw new ApiError(401, "UNAUTHORIZED", "The webhook signature is invalid");
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+    } catch {
+      throw new ApiError(400, "VALIDATION_FAILED", "The webhook payload must be valid JSON");
+    }
+    const provider =
+      typeof payload.provider === "string" && payload.provider.trim()
+        ? payload.provider.trim().slice(0, 60)
+        : "generic";
+    const externalId =
+      (typeof payload.id === "string" && payload.id.trim()) ||
+      (typeof payload.reference === "string" && payload.reference.trim()) ||
+      "";
+    // A stable identifier is required: generated ids would defeat retry
+    // idempotency, so the event is refused instead.
+    if (!externalId) {
+      await withTenantRepos({ clinicId: "system", actorId: "", actorRole: "" }, (repos) =>
+        repos.billing.recordWebhookEvent({
+          provider,
+          externalId: payloadHash.slice(0, 16),
+          signatureValid: false,
+          payloadHash,
+          sizeBytes: raw.length,
+        }),
+      );
+      throw new ApiError(400, "VALIDATION_FAILED", "The webhook payload carries no stable event identifier");
+    }
 
     const result = await withTenantRepos({ clinicId: "system", actorId: "", actorRole: "" }, (repos) =>
       repos.billing.recordWebhookEvent({
-        provider: typeof payload.provider === "string" ? payload.provider : "generic",
-        externalId,
+        provider,
+        externalId: externalId.slice(0, 200),
         signatureValid,
-        payload,
+        payloadHash,
+        sizeBytes: raw.length,
       }),
     );
-    void result; // events are recorded; settlement mapping is provider-specific
+    // Settlement ingestion is worker territory: PROCESSED events stay in the
+    // inbox until an idempotent worker maps them onto payments, keyed by the
+    // same (provider, externalId) - never settled inline here. The
+    // webhook_events row is the ingestion evidence.
     res.json({ received: true, status: result.status });
   }),
 );

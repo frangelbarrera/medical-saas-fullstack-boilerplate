@@ -308,23 +308,29 @@ describe("billing workflow", () => {
       amount: "51.00",
       currency: "CHF",
     };
-    const sign = crypto.createHmac("sha256", secret).update(JSON.stringify(event)).digest("hex");
+    const raw = JSON.stringify(event);
+    const timestamp = Date.now().toString();
+    const sign = crypto.createHmac("sha256", secret).update(`${timestamp}.${raw}`).digest("hex");
+    const webhookHeaders = {
+      "Content-Type": "application/json",
+      "x-webhook-timestamp": timestamp,
+      "x-signature": sign,
+    };
 
-    const ok = await request(app).post("/api/v1/webhooks/payment").set("x-signature", sign).send(event);
+    const ok = await request(app).post("/api/v1/webhooks/payment").set(webhookHeaders).send(raw);
     expect(ok.status).toBe(200);
     expect(ok.body.status).toBe("PROCESSED");
 
     // Identical delivery (network retry): deduplicated, never applied twice.
-    const replay = await request(app).post("/api/v1/webhooks/payment").set("x-signature", sign).send(event);
+    const replay = await request(app).post("/api/v1/webhooks/payment").set(webhookHeaders).send(raw);
     expect(replay.status).toBe(200);
     expect(replay.body.status).toBe("DUPLICATE");
 
-    // Forged signature: recorded as rejected, never settled.
-    const forged = await request(app).post("/api/v1/webhooks/payment").set("x-signature", "deadbeef").send({
-      ...event,
-      id: `evt_http_forged_${Date.now()}`,
-    });
-    expect(forged.status).toBe(200);
-    expect(forged.body.status).toBe("REJECTED");
+    // Forged signature: refused with 401, never processed as accepted.
+    const forged = await request(app)
+      .post("/api/v1/webhooks/payment")
+      .set({ "Content-Type": "application/json", "x-webhook-timestamp": timestamp, "x-signature": "deadbeef".repeat(8) })
+      .send(raw);
+    expect(forged.status).toBe(401);
   });
 });

@@ -232,6 +232,7 @@ model Clinic {
   availabilityRules AvailabilityRule[]
   breakGlassAccesses BreakGlassAccess[]
   careTeamMemberships CareTeamMembership[]
+  invoiceCounter     InvoiceCounter?
   dsarArtifacts      DsarArtifact[]
 
   @@map("clinics")
@@ -809,14 +810,31 @@ model Expense {
 model WebhookEvent {
   id             String             @id @default(uuid())
   provider       String
-  externalId     String             @unique @map("external_id")
+  externalId     String             @map("external_id")
   signatureValid Boolean            @default(false) @map("signature_valid")
-  payload        Json
+  /// Minimal metadata only (BIL-001): payload SHA-256 hash and byte size.
+  /// Raw provider payloads never reach persistence.
+  payloadHash    String?            @map("payload_hash")
+  sizeBytes      Int?               @map("size_bytes")
   status         WebhookEventStatus
   receivedAt     DateTime           @default(now()) @map("received_at")
 
+  @@unique([provider, externalId])
   @@index([provider, receivedAt])
   @@map("webhook_events")
+}
+
+/// Per-clinic invoice number counter (BIL-002). The invoice creation path
+/// bumps this row atomically (INSERT ... ON CONFLICT DO UPDATE ... RETURNING)
+/// so concurrent invoices cannot race MAX()+1. The unique index on
+/// invoices(clinic_id, number) is the final backstop.
+model InvoiceCounter {
+  clinicId   String @id @map("clinic_id")
+  lastNumber Int    @map("last_number")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_counters")
 }
 
 // ==========================================

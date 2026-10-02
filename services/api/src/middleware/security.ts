@@ -8,7 +8,7 @@
  * CSP does not block. Development keeps the relaxed policy for Vite HMR.
  */
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import cors from "cors";
 import type { Request } from "express";
 import { loadEnv } from "@medical/data";
@@ -50,11 +50,12 @@ export const authLimiter = rateLimit({
   handler: rateLimitHandler(15 * 60, "Too many sign-in attempts, please try again later"),
   // Enumeration protection (RL-003): the budget pairs the source IP with
   // the attempted account, so spraying many usernames from one IP or
-  // hammering one username from many IPs both exhaust quickly.
+  // hammering one username from many IPs both exhaust quickly. IPv6 zones
+  // are normalized by the ipKeyGenerator helper.
   keyGenerator: (req: Request): string => {
     const body = req.body as { username?: unknown } | undefined;
     const username = typeof body?.username === "string" ? body.username.trim().toLowerCase() : "anonymous";
-    return `${req.ip ?? "unknown"}:${username}`;
+    return `${ipKeyGenerator(req.ip ?? "unknown")}:${username}`;
   },
 });
 
