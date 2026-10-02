@@ -86,23 +86,50 @@ docker compose up -d app          # runtime on :3000 (limited role)
 ## Testing
 
 ```bash
-npm run test        # unit + integration (41 tests; PG-backed tests exercise RLS as medical_app)
-npm run test:e2e    # builds the SPA, resets+seeds the e2e database, runs 9 Playwright scenarios
-npm run lint        # ESLint 9 + security + no-secrets plugins
-npm run typecheck   # strict TypeScript across every workspace
+npm run test:unit         # contracts, domain, integrations (no database needed)
+npm run test:integration  # api + data suites against PostgreSQL (RLS as medical_app)
+npm run test:authorization # the negative authorization matrix (DB required)
+npm run test              # everything
+npm run test:e2e          # builds the SPA, resets+seeds the e2e database, runs Playwright
+npm run lint              # ESLint 9 + security + no-secrets plugins
+npm run typecheck         # strict TypeScript across every workspace
 ```
 
-Integration tests use `TEST_DATABASE_URL` and skip gracefully when it is not
-reachable; CI provisions PostgreSQL, the app role and both databases.
+The test database defaults to `postgresql://...55432/medical_saas_test` and
+matches `docker-compose.test.yml`:
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+npx prisma migrate deploy --schema services/data/prisma/schema.prisma
+npm test
+```
+
+When PostgreSQL is unreachable, database-backed suites skip with an explicit
+notice; set `REQUIRE_DB=1` (as CI does) to make a missing database a hard
+failure so skipped authorization tests can never produce a green job.
+
+## Compliance and operations documentation
+
+- `docs/compliance/` - jurisdiction packs (CH FADP, EU GDPR, UK, US HIPAA,
+  Canada, Australia, Singapore), cross-border data map, retention matrix
+  and the DSAR operational runbook. These are technical mappings: final
+  compliance statements require legal, clinical and security review.
+- `docs/threat-model.md` - STRIDE model mapped to implemented controls.
+- `docs/adr/decisions.md` - architecture decision records.
+- `ops/runbooks/` - break-glass, backup/restore, incident response and the
+  audit WORM export procedure (`npm run audit:export` / `audit:verify`).
 
 ## Security architecture (summary)
 
 - Minimal-claim JWT (`sub`, `sid`, `tid`) + durable sessions; revocation is immediate.
 - Refresh tokens in PostgreSQL with atomic compare-and-set rotation and family-based replay detection (replaying one token kills the whole family).
 - CSRF double-submit; strict production CSP without `unsafe-inline`; hardened Helmet headers; `no-store` on all API responses.
-- PHI encrypted at field level (AES-256-GCM); exact-match search via HMAC indexes instead of decrypting the directory.
+- PHI encrypted at field level (AES-256-GCM) with a versioned envelope so keys rotate without downtime (`npm run phi:reencrypt`); exact-match search via HMAC indexes instead of decrypting the directory.
+- Governed access model: capability model + care-team relationships + audited break-glass with abuse caps, revocation and post-use review; secretaries receive directory-only projections.
+- Hash-chained audit trail with per-clinic continuity verification and HMAC-signed WORM batch export.
 - Uniform `404` for cross-tenant resources (no existence leaks); server-side break-glass with reason for administrative record access.
-- Webhooks are HMAC-verified and idempotent by `(provider, external_id)`.
+- Webhooks are HMAC-verified over the raw body with anti-replay timestamps and idempotent by `(provider, external_id)`; invoice numbering is race-free under a per-clinic counter with a unique constraint.
+- SMART on FHIR scopes per resource with patient-context pinning and purpose-of-use validation; prompt templates are immutable versions under dual-control approval.
 
 Details and responsible disclosure: [SECURITY.md](SECURITY.md).
 

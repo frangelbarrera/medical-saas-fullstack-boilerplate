@@ -31,6 +31,8 @@ import { fhirRouter } from "./routes/fhir.js";
 import { searchRouter } from "./routes/search.js";
 import { adminRouter } from "./routes/admin.js";
 import { checkDatabaseHealth } from "@medical/data";
+import { metricsMiddleware, metricsText } from "./lib/metrics.js";
+import { isDraining } from "./lib/readiness.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,7 +63,6 @@ export async function createApp(): Promise<express.Application> {
   app.use(corsMiddleware);
   app.use(cookieParser());
 
-  // CSRF double-submit on the API surface (webhooks use HMAC instead).
   app.use("/api/", csrfProtection);
 
   app.use(helmetMiddleware);
@@ -84,6 +85,7 @@ export async function createApp(): Promise<express.Application> {
   );
 
   const api = express.Router();
+  api.use(metricsMiddleware);
   api.use(authRouter);
   api.use(patientsRouter);
   api.use(schedulingRouter);
@@ -98,17 +100,26 @@ export async function createApp(): Promise<express.Application> {
   api.use(adminRouter);
   api.use(webhooksRouter);
 
-  // Liveness (no DB) + readiness (real DB round-trip, SEC-003).
+  // Liveness (process up, no DB), readiness (real DB round-trip that also
+  // reports draining state during shutdown) and PHI-free latency metrics
+  // (OPS-001 / OPS-002).
   api.get("/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
+  api.get("/health/live", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
   api.get("/health/ready", async (_req, res) => {
-    const healthy = await checkDatabaseHealth();
+    const healthy = !isDraining() && (await checkDatabaseHealth());
     res.status(healthy ? 200 : 503).json({
-      status: healthy ? "ready" : "degraded",
-      database: healthy ? "up" : "down",
+      status: healthy ? "ready" : isDraining() ? "draining" : "degraded",
+      database: isDraining() ? "not-probed" : healthy ? "up" : "down",
       timestamp: new Date().toISOString(),
     });
+  });
+  api.get("/metrics-lite", (_req, res) => {
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.send(metricsText());
   });
 
   app.use("/api/v1", api);
@@ -127,8 +138,12 @@ export async function createApp(): Promise<express.Application> {
 
   app.use("/api", notFoundHandler);
 
-  // SPA: Vite middleware in dev, built dist in production.
-  if (env.NODE_ENV !== "production") {
+  // SPA: Vite middleware in dev, built dist in production. Test runs skip
+  // the dev server entirely: no Vite instance means no HMR websocket port
+  // collisions between parallel suites.
+  if (env.NODE_ENV === "test") {
+    // Intentionally no SPA middleware under test; supertest targets /api.
+  } else if (env.NODE_ENV !== "production") {
     const { createServer } = await import("vite");
     const vite = await createServer({
       root: path.resolve(__dirname, "../../../apps/web"),

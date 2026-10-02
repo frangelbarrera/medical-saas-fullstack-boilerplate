@@ -39,6 +39,10 @@ export async function withTenant<T>(
   if (!clinicId) throw new Error("withTenant: missing tenant id");
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.current_clinic_id', ${clinicId}, true)`;
+    // Query budget (PERF-002): no tenant query may run away and hold a
+    // connection for an unbounded time. 30s covers every indexed path in
+    // the schema; long jobs must batch explicitly.
+    await tx.$executeRaw`SELECT set_config('statement_timeout', '30000', true)`;
     return fn(tx);
   });
 }

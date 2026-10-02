@@ -873,6 +873,7 @@ describe("fhir scope enforcement and ai injection screening (INT-001 / AI-002)",
   it("rejects an invalid purposeOfUse value", async () => {
     const token = await bearerToken("user/Patient.read");
     const res = await request(app)
+      // eslint-disable-next-line no-secrets/no-secrets -- query string, not a credential
       .get(`/api/v1/fhir/Patient/${ids.p1}?purposeOfUse=NOT_A_PURPOSE`)
       .set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(400);

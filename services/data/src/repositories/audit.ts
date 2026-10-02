@@ -107,6 +107,9 @@ export class AuditRepository {
   async query(clinicId: string, q: AuditQuery): Promise<Paginated<AuditEvent>> {
     const where = {
       clinicId,
+      // Keyset pagination (PERF-001): a cursor walk stays O(limit) on the
+      // (clinic_id, seq) index regardless of how deep the page is.
+      ...(q.cursor ? { seq: { lt: q.cursor } } : {}),
       ...(q.action ? { action: q.action } : {}),
       ...(q.category ? { category: q.category } : {}),
       ...(q.subjectPatientId ? { subjectPatientId: q.subjectPatientId } : {}),
@@ -121,11 +124,11 @@ export class AuditRepository {
         : {}),
     };
     const [total, rows] = await Promise.all([
-      this.tx.auditLog.count({ where }),
+      this.tx.auditLog.count({ where: q.cursor ? { clinicId } : where }),
       this.tx.auditLog.findMany({
         where,
         orderBy: { seq: "desc" },
-        skip: (q.page - 1) * q.limit,
+        skip: q.cursor ? 0 : (q.page - 1) * q.limit,
         take: q.limit,
       }),
     ]);

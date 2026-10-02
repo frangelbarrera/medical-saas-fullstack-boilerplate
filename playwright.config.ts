@@ -6,7 +6,7 @@ import { defineConfig, devices } from "@playwright/test";
  * The suite boots the real application (API + built SPA) against a dedicated
  * test database and drives a real browser through the main clinical
  * workflows. It requires:
- *   - a PostgreSQL test database reachable via E2E_DATABASE_URL
+ *   - schema work via E2E_ADMIN_URL and the runtime app-role URL via E2E_APP_URL
  *   - the app role `medical_app` (ops/db/init/01-app-role.sql)
  *
  * CI provisions both; locally run scripts/e2e-prepare.sh first.

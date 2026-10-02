@@ -16,7 +16,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -35,10 +35,14 @@ jobs:
       PHI_HMAC_KEY: fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321
       PAYMENT_WEBHOOK_SECRET: ci_webhook_secret_16
       # Integration tests run as the LIMITED role so row-level security is
+      # exercised exactly as in production. REQUIRE_DB=1 makes a missing
+      # database a hard failure - skipped authorization tests can never
+      # produce a green job.
       # exercised exactly as in production.
       TEST_DATABASE_URL: postgresql://medical_app:ci_app_password@localhost:5432/medical_saas_ci?schema=public
       E2E_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/medical_saas_e2e?schema=public
       E2E_APP_URL: postgresql://medical_app:ci_app_password@localhost:5432/medical_saas_e2e?schema=public
+      REQUIRE_DB: "1"
 
     steps:
       - name: Checkout Repository
@@ -84,8 +88,8 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/medical_saas_ci?schema=public
 
-      - name: Unit + Integration Tests
-        run: npm run test
+      - name: Unit + Integration Tests (DB required)
+        run: npm run test:ci
 
       - name: Build SPA
         run: npm run build

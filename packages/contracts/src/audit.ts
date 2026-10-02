@@ -147,6 +147,8 @@ export const auditQuery = z.object({
   to: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(30),
+  /** Keyset cursor (PERF-001): return events with seq strictly below it. */
+  cursor: z.coerce.number().int().optional(),
 });
 export type AuditQuery = z.infer<typeof auditQuery>;
 

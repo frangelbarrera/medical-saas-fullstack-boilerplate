@@ -13,6 +13,7 @@ import { bootstrap } from "./bootstrap.js";
 import { createApp } from "./app.js";
 import { logger } from "./lib/logger.js";
 import { prisma, checkDatabaseHealth } from "@medical/data";
+import { setDraining } from "./lib/readiness.js";
 
 const env = loadEnv();
 
@@ -37,7 +38,10 @@ async function main(): Promise<void> {
   });
 
   const shutdown = async (signal: string) => {
-    logger.info({ msg: `${signal} received, shutting down` });
+    logger.info({ msg: `${signal} received, draining connections` });
+    // Flip readiness first so the load balancer stops routing here, then
+    // close the server and give in-flight requests a bounded window.
+    setDraining();
     server.close(async () => {
       await prisma.$disconnect();
       process.exit(0);

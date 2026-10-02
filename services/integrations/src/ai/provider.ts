@@ -40,6 +40,48 @@ type GenAiSdk = typeof import("@google/genai");
 
 let sdkCache: GenAiSdk | null = null;
 
+/**
+ * Outbound circuit breaker (PERF-003): after five consecutive provider
+ * failures the breaker opens for 30 seconds and calls fail fast, protecting
+ * the request path from a hanging or degraded upstream. Half-open after
+ * cooldown lets one probe through to re-close it.
+ */
+export class CircuitBreaker {
+  private failures = 0;
+  private openedAt = 0;
+
+  constructor(
+    private readonly threshold = 5,
+    private readonly cooldownMs = 30_000,
+  ) {}
+
+  get open(): boolean {
+    if (this.failures < this.threshold) return false;
+    if (Date.now() - this.openedAt >= this.cooldownMs) {
+      // Half-open: allow a probe.
+      this.failures = this.threshold - 1;
+      return false;
+    }
+    return true;
+  }
+
+  get available(): boolean {
+    return !this.open;
+  }
+
+  recordSuccess(): void {
+    this.failures = 0;
+    this.openedAt = 0;
+  }
+
+  recordFailure(): void {
+    this.failures += 1;
+    if (this.failures >= this.threshold) this.openedAt = Date.now();
+  }
+}
+
+const providerBreaker = new CircuitBreaker();
+
 /** ESM-friendly lazy loader (no require()) for the server-only SDK. */
 const loadSdk = (): GenAiSdk => {
   if (!sdkCache) {
@@ -71,17 +113,27 @@ export class GeminiProvider implements AiProvider {
   }
 
   private async complete(systemPrompt: string, userPrompt: string): Promise<string> {
-    const response = await this.client.models.generateContent({
-      model: this.model,
-      contents: userPrompt,
-      config: {
-        systemInstruction: systemPrompt,
-        temperature: 0.2,
-      },
-    });
-    const text = response.text;
-    if (!text) throw new Error("Empty response from AI provider");
-    return text.trim();
+    // Fail fast while the provider is known to be unhealthy (PERF-003).
+    if (providerBreaker.open) {
+      throw new Error("AI provider circuit breaker is open; try again shortly");
+    }
+    try {
+      const response = await this.client.models.generateContent({
+        model: this.model,
+        contents: userPrompt,
+        config: {
+          systemInstruction: systemPrompt,
+          temperature: 0.2,
+        },
+      });
+      const text = response.text;
+      if (!text) throw new Error("Empty response from AI provider");
+      providerBreaker.recordSuccess();
+      return text.trim();
+    } catch (err) {
+      providerBreaker.recordFailure();
+      throw err;
+    }
   }
 
   async generateScribeDraft(
