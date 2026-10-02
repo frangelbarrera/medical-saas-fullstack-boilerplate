@@ -1,5 +1,13 @@
-# Compliance and ePHI scope
+**Maintainer:** Frangel Raúl Crespo Barrera
+**Last verified:** 2026-10-02
+**Scope:** ePHI assumptions, roles, tenant isolation, authentication, encryption, audit, retention, backups, deletion/export, providers, and BAA requirements.
 
-This boilerplate is not a HIPAA, GDPR, FADP, or ISO 27001 certification. A deployment that processes ePHI requires an organization-specific risk analysis, administrative, physical, and technical safeguards, appropriate contracts such as a BAA where applicable, and legal/compliance review.
+| Field | Current record |
+|---|---|
+| Status | Boilerplate explicitly does not certify HIPAA, GDPR, FADP, or ISO 27001. Tests are distributed across packages and services. |
+| Evidence | `services/api/test/`, `services/data/test/`, `services/domain/test/`, `services/integrations/test/`, `packages/contracts/test/`, `SECURITY.md`, `ci.yml`. |
+| Verification | Run the documented unit/integration/E2E commands; review deployment and provider configuration separately. |
+| Owner | Repository owner for the template; deployer and legal/compliance owners for a real service. |
+| Limitations | Legal review, risk analysis, safeguards, contracts, and operational evidence are required before any compliance claim. |
 
-Document roles, access control, tenant isolation, encryption, audit logs, backups, retention, deletion/export, subprocessors, and incident response for the actual deployment. Do not use real patient data in tests, examples, or development environments.
+Do not use real patient data in tests, examples, or development. Document actual data flows, retention, deletion/export, subprocessors, incident response, and backups for each deployment.
