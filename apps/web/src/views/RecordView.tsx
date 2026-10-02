@@ -55,6 +55,8 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
   const [encountersKey, setEncountersKey] = useState(0);
   const [breakGlassNeeded, setBreakGlassNeeded] = useState(false);
   const [breakGlassReason, setBreakGlassReason] = useState("");
+  /** Access gate from the governed 403s (safe meta: name + internalRef only). */
+  const [gate, setGate] = useState<{ kind: "BREAK_GLASS" | "CARE_RELATIONSHIP"; name: string; internalRef: string } | null>(null);
   const [failed, setFailed] = useState(false);
 
   const clinicalAccess = can("clinical:read");
@@ -63,8 +65,20 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
     try {
       const p = await api.patient(patientId);
       setPatient(p);
-    } catch {
-      setFailed(true);
+      setGate(null);
+    } catch (err) {
+      if (
+        err instanceof ApiProblem &&
+        (err.code === "BREAK_GLASS_REQUIRED" || err.code === "CARE_RELATIONSHIP_REQUIRED")
+      ) {
+        setGate({
+          kind: err.code === "BREAK_GLASS_REQUIRED" ? "BREAK_GLASS" : "CARE_RELATIONSHIP",
+          name: String(err.meta?.name ?? ""),
+          internalRef: String(err.meta?.internalRef ?? ""),
+        });
+      } else {
+        setFailed(true);
+      }
     }
   }, [patientId]);
 
@@ -92,6 +106,37 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
   if (failed) {
     return <EmptyState title={t("patients.noResults")} body={t("patients.noResultsBody")} action={<Button onClick={() => navigate("/patients")}>{t("patients.title")}</Button>} />;
   }
+  // Governed access gate: the 403 meta carries the directory-visible identity
+  // (name + internal ref) and never any contact PHI.
+  if (gate) {
+    return (
+      <section aria-label={gate.name}>
+        <header className="mb-8">
+          <Kicker>PATIENT / {t("patients.internalId").toUpperCase()} {gate.internalRef}</Kicker>
+          <h1 className="font-serif text-4xl m-0 text-ink mt-2">{gate.name}</h1>
+        </header>
+        {gate.kind === "BREAK_GLASS" ? (
+          <div className="border border-signal bg-signal-tint p-6">
+            <h2 className="font-serif text-lg mt-0 mb-2 text-signal">{t("record.breakGlassTitle")}</h2>
+            <p className="text-sm text-ink-soft mt-0 mb-4 max-w-lg">{t("record.breakGlassBody")}</p>
+            <div className="flex gap-2 items-end">
+              <div className="flex-1 max-w-md">
+                <Field label={t("record.breakGlassReason")} htmlFor="bg-reason">
+                  <input id="bg-reason" className="w-full bg-transparent border-b border-ink py-1.5 text-sm focus:outline-none"
+                    value={breakGlassReason} onChange={(e) => setBreakGlassReason(e.target.value)} />
+                </Field>
+              </div>
+              <Button variant="danger" disabled={breakGlassReason.trim().length < 10} onClick={() => void grantBreakGlass()}>
+                {t("record.breakGlassConfirm")}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Banner tone="warning">{t("record.careRelationshipNeeded")}</Banner>
+        )}
+      </section>
+    );
+  }
   if (!patient) {
     return <div aria-busy="true"><Skeleton className="h-28 w-2/3" /><Skeleton className="h-96 w-full mt-8" /></div>;
   }
@@ -117,6 +162,8 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
       await api.breakGlass(patientId, breakGlassReason);
       setBreakGlassNeeded(false);
       setBreakGlassReason("");
+      setGate(null);
+      await loadCore();
       await loadClinical();
       toast(t("record.breakGlassConfirm"), "warning");
     } catch (err) {

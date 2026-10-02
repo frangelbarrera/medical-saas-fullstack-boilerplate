@@ -43,6 +43,8 @@ export class ApiProblem extends Error {
     public code: string,
     message: string,
     public errors?: { field: string; message: string }[],
+    /** Safe RFC 9457 extensions (e.g. name/internalRef for the access gate). */
+    public meta?: Record<string, string | number | boolean | null>,
   ) {
     super(message);
     this.name = "ApiProblem";
@@ -77,6 +79,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       (data as { code?: string })?.code ?? "INTERNAL",
       (data as { title?: string })?.title ?? "Request failed",
       (data as { errors?: { field: string; message: string }[] })?.errors,
+      (data as { meta?: Record<string, string | number | boolean | null> })?.meta,
     );
   }
   return data as T;
@@ -137,6 +140,14 @@ export const api = {
   addObservation: (input: unknown) => request<Observation>("POST", "/observations", input),
   breakGlass: (patientId: string, reason: string) =>
     request<{ ok: boolean }>("POST", "/break-glass", { patientId, reason }),
+  careTeam: (patientId: string) =>
+    request<{ items: { id: string; userId: string; userName: string; userRole: string; memberRole: string; startedAt: string; endedAt: string | null }[] }>(
+      "GET", `/patients/${patientId}/care-team`,
+    ),
+  assignCareTeam: (patientId: string, userId: string, memberRole = "CARING_DOCTOR") =>
+    request<{ id: string }>("POST", `/patients/${patientId}/care-team`, { userId, memberRole }),
+  endCareTeam: (patientId: string, membershipId: string) =>
+    request<{ ok: boolean }>("DELETE", `/patients/${patientId}/care-team/${membershipId}`),
 
   // messaging
   threads: () => request<{ items: ThreadSummary[] }>("GET", "/threads"),
@@ -166,7 +177,25 @@ export const api = {
   createDsar: (input: unknown) => request<DsarRequest>("POST", "/dsar", input),
   setDsarStatus: (id: string, status: string, decisionNote?: string) =>
     request<DsarRequest>("PATCH", `/dsar/${id}/status`, { status, decisionNote }),
-  dsarExportUrl: (patientId: string) => `${BASE}/dsar/export/${patientId}`,
+  dsarPrepare: (id: string) => request<DsarRequest>("POST", `/dsar/${id}/prepare`),
+  dsarApprove: (id: string) => request<DsarRequest>("POST", `/dsar/${id}/approve`),
+  dsarRelease: (id: string) =>
+    request<{ token: string; expiresAt: string; downloadPath: string }>("POST", `/dsar/${id}/release`),
+  dsarDownloadUrl: (id: string, token: string) => `${BASE}/dsar/${id}/download?token=${encodeURIComponent(token)}`,
+  stepUp: (password: string, totp?: string) =>
+    request<{ ok: boolean; windowMinutes: number }>("POST", "/auth/step-up", { password, totp }),
+  mfaEnroll: () =>
+    request<{ secret: string; otpauth: string }>("POST", "/auth/mfa/enroll"),
+  mfaActivate: (code: string) => request<{ ok: boolean }>("POST", "/auth/mfa/activate", { code }),
+  mfaDisable: (password: string, totp?: string) =>
+    request<{ ok: boolean }>("DELETE", "/auth/mfa", { password, totp }),
+  compliance: () =>
+    request<{
+      jurisdiction: string; label: string; frameworks: string[]; regulator: string;
+      dsarDeadlineDays: number; aiProcessingConsentRequired: boolean;
+      breachNotification: { required: boolean; deadlineHours: number } | null;
+      clinicalRetentionYears: number; dataResidency: string; notes: string[];
+    }>("GET", "/admin/compliance"),
 
   // ai
   scribeDraft: (encounterId: string) => request<AiDraft>("POST", "/ai/scribe-draft", { encounterId }),

@@ -207,6 +207,11 @@ const ClinicTab = () => {
 
 const DSAR_TYPES = ["ACCESS", "EXPORT", "RECTIFICATION", "OBJECTION", "RESTRICTION"] as const;
 
+/**
+ * Governed DSAR console (PRIV-001): prepare (encrypted artifact) -> approve
+ * (dual control) -> release (one-time token) -> download. Every governed
+ * action sits behind a step-up password re-authentication.
+ */
 const PrivacyTab = () => {
   const { t, locale } = useI18n();
   const { toast } = useToast();
@@ -217,6 +222,11 @@ const PrivacyTab = () => {
   const [patientName, setPatientName] = useState("");
   const [results, setResults] = useState<{ id: string; fullName: string; internalRef: string }[]>([]);
   const [type, setType] = useState<string>("EXPORT");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const [stepUpPassword, setStepUpPassword] = useState("");
+  const [pendingAction, setPendingAction] = useState<(() => Promise<void>) | null>(null);
+  const [releaseToken, setReleaseToken] = useState<{ id: string; url: string; expiresAt: string } | null>(null);
 
   const load = useCallback(() => {
     api.dsar().then((r) => setItems(r.items)).catch(() => setItems([]));
@@ -233,6 +243,60 @@ const PrivacyTab = () => {
     return () => clearTimeout(timer);
   }, [patientQuery, open, patientId]);
 
+  const withStepUp = (action: () => Promise<void>) => {
+    setPendingAction(() => action);
+    setStepUpPassword("");
+    setStepUpOpen(true);
+  };
+
+  const runStepUp = async () => {
+    try {
+      await api.stepUp(stepUpPassword);
+      setStepUpOpen(false);
+      setStepUpPassword("");
+      const action = pendingAction;
+      setPendingAction(null);
+      if (action) await action();
+    } catch (err) {
+      toast(err instanceof ApiProblem ? err.message : t("common.error"), "danger");
+    }
+  };
+
+  const governed = (id: string, action: () => Promise<void>) => {
+    setBusyId(id);
+    withStepUp(async () => {
+      try {
+        await action();
+      } catch (err) {
+        toast(err instanceof ApiProblem ? err.message : t("common.error"), "danger");
+      } finally {
+        setBusyId(null);
+      }
+    });
+  };
+
+  const prepare = (d: DsarRequest) =>
+    governed(d.id, async () => {
+      await api.dsarPrepare(d.id);
+      toast(t("admin.dsarPrepared"), "success");
+      load();
+    });
+
+  const approve = (d: DsarRequest) =>
+    governed(d.id, async () => {
+      await api.dsarApprove(d.id);
+      toast(t("admin.dsarApproved"), "success");
+      load();
+    });
+
+  const release = (d: DsarRequest) =>
+    governed(d.id, async () => {
+      const r = await api.dsarRelease(d.id);
+      setReleaseToken({ id: d.id, url: api.dsarDownloadUrl(d.id, r.token), expiresAt: r.expiresAt });
+      toast(t("admin.dsarReleased"), "success");
+      load();
+    });
+
   const create = async () => {
     try {
       await api.createDsar({ patientId, type });
@@ -244,20 +308,25 @@ const PrivacyTab = () => {
     }
   };
 
-  const fulfill = async (d: DsarRequest) => {
-    try {
-      await api.setDsarStatus(d.id, "FULFILLED");
-      load();
-    } catch (err) {
-      toast(err instanceof ApiProblem ? err.message : t("common.error"), "danger");
-    }
-  };
-
   return (
     <div>
       <div className="mb-4 flex justify-end">
         <Button variant="action" arrow onClick={() => setOpen(true)}>{t("admin.dsarNew")}</Button>
       </div>
+      {releaseToken ? (
+        <div className="mb-4 border border-moss bg-moss-tint p-4">
+          <p className="text-sm mt-0 mb-2">{t("admin.dsarTokenReady")}</p>
+          <p className="font-mono text-2xs mb-2 break-all">{releaseToken.url}</p>
+          <div className="flex gap-3 items-center">
+            <a className="font-mono text-2xs text-navy hover:underline" href={releaseToken.url} download>
+              {t("admin.dsarDownload")}
+            </a>
+            <button type="button" className="font-mono text-2xs text-ink-faint hover:text-signal" onClick={() => setReleaseToken(null)}>
+              {t("common.close")}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {items === null ? (
         <p aria-busy="true" className="font-mono text-2xs text-ink-faint">{t("common.loading")}…</p>
       ) : (
@@ -270,20 +339,41 @@ const PrivacyTab = () => {
             { key: "due", header: t("admin.dsarDue"), render: (d) => formatDate(d.dueAt, locale) },
             { key: "status", header: t("common.status"), render: (d) => <StateLabel tone={d.status === "FULFILLED" ? "good" : d.status === "REJECTED" ? "alert" : "review"}>{d.status}</StateLabel> },
             {
+              key: "flow",
+              header: t("admin.dsarFlow"),
+              render: (d) => (
+                <span className="flex flex-col gap-0.5 font-mono text-2xs text-ink-faint">
+                  <span>{d.preparedAt ? `✓ ${t("admin.dsarPrepare")}` : t("admin.dsarPrepare")}</span>
+                  <span>{d.approvedAt ? `✓ ${t("admin.dsarApprove")} · ${d.approvedByName ?? ""}` : t("admin.dsarApprove")}</span>
+                  <span>{d.downloadedAt ? `✓ ${t("admin.dsarDownload")}` : d.downloadIssuedAt ? `~ ${t("admin.dsarRelease")}` : t("admin.dsarRelease")}</span>
+                </span>
+              ),
+            },
+            {
               key: "actions",
               header: "",
-              width: "170px",
+              width: "200px",
               render: (d) => (
                 <span className="flex gap-3 justify-end">
-                  {d.status !== "FULFILLED" && d.status !== "REJECTED" ? (
-                    <button type="button" className="font-mono text-2xs text-moss hover:underline" onClick={() => void fulfill(d)}>
-                      {t("admin.dsarFulfill")}
+                  {d.status !== "FULFILLED" && d.status !== "REJECTED" && !d.preparedAt ? (
+                    <button type="button" disabled={busyId === d.id} className="font-mono text-2xs text-navy hover:underline disabled:opacity-40" onClick={() => prepare(d)}>
+                      {t("admin.dsarPrepare")}
                     </button>
                   ) : null}
-                  {d.type === "EXPORT" ? (
-                    <a className="font-mono text-2xs text-navy hover:underline" href={api.dsarExportUrl(d.patientId)} download>
-                      {t("admin.dsarExport")}
-                    </a>
+                  {d.preparedAt && !d.approvedAt ? (
+                    <button type="button" disabled={busyId === d.id} className="font-mono text-2xs text-moss hover:underline disabled:opacity-40" onClick={() => approve(d)}>
+                      {t("admin.dsarApprove")}
+                    </button>
+                  ) : null}
+                  {d.approvedAt && !d.downloadIssuedAt ? (
+                    <button type="button" disabled={busyId === d.id} className="font-mono text-2xs text-navy hover:underline disabled:opacity-40" onClick={() => release(d)}>
+                      {t("admin.dsarRelease")}
+                    </button>
+                  ) : null}
+                  {d.status !== "FULFILLED" && d.status !== "REJECTED" && d.downloadedAt ? (
+                    <button type="button" className="font-mono text-2xs text-moss hover:underline" onClick={() => void api.setDsarStatus(d.id, "FULFILLED").then(load)}>
+                      {t("admin.dsarFulfill")}
+                    </button>
                   ) : null}
                 </span>
               ),
@@ -291,6 +381,12 @@ const PrivacyTab = () => {
           ]}
         />
       )}
+      <Modal open={stepUpOpen} onClose={() => setStepUpOpen(false)} kicker={t("settings.security").toUpperCase()} title={t("admin.dsarStepUpTitle")}
+        footer={<><Button variant="ghost" onClick={() => setStepUpOpen(false)}>{t("common.cancel")}</Button>
+          <Button variant="action" disabled={stepUpPassword.length < 1} onClick={() => void runStepUp()}>{t("admin.dsarStepUpConfirm")}</Button></>}>
+        <p className="text-sm text-ink-soft mt-0 mb-4">{t("admin.dsarStepUpBody")}</p>
+        <Input label={t("settings.currentPassword")} type="password" value={stepUpPassword} onChange={(e) => setStepUpPassword(e.target.value)} />
+      </Modal>
       <Modal open={open} onClose={() => setOpen(false)} kicker={t("admin.privacy").toUpperCase()} title={t("admin.dsarNew")}
         footer={<><Button variant="ghost" onClick={() => setOpen(false)}>{t("common.cancel")}</Button>
           <Button variant="action" disabled={!patientId} onClick={() => void create()}>{t("common.create")}</Button></>}>
