@@ -124,7 +124,7 @@ jobs:
         uses: actions/dependency-review-action@v4
         if: github.event_name == 'pull_request'
         with:
-          fail-on-severity: high
+          fail-on-severity: moderate
 
       - name: Secret Scan (gitleaks)
         uses: gitleaks/gitleaks-action@ff98106e4d13ca5c2c1f9acc32e3ede5af0ca7f5
@@ -134,8 +134,8 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: npm audit (high severity gate)
-        run: npm audit --audit-level=high
+      - name: npm audit (moderate severity gate)
+        run: npm audit --audit-level=moderate
 
       - name: Generate SBOM (CycloneDX)
         run: npx --yes @cyclonedx/cyclonedx-npm --output-format JSON --output-file sbom.json
