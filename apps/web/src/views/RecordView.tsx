@@ -103,6 +103,24 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
     if (clinicalAccess && !breakGlassNeeded) void loadClinical();
   }, [clinicalAccess, breakGlassNeeded, loadClinical]);
 
+  // Declared before the early returns below: the break-glass gate JSX
+  // references this handler, and a const declaration after the return
+  // would leave the binding in the temporal dead zone at click time
+  // (crash: "Cannot access ... before initialization" in the bundle).
+  const grantBreakGlass = async () => {
+    try {
+      await api.breakGlass(patientId, breakGlassReason);
+      setBreakGlassNeeded(false);
+      setBreakGlassReason("");
+      setGate(null);
+      await loadCore();
+      await loadClinical();
+      toast(t("record.breakGlassConfirm"), "warning");
+    } catch (err) {
+      toast(err instanceof ApiProblem ? err.message : t("common.error"), "danger");
+    }
+  };
+
   if (failed) {
     return <EmptyState title={t("patients.noResults")} body={t("patients.noResultsBody")} action={<Button onClick={() => navigate("/patients")}>{t("patients.title")}</Button>} />;
   }
@@ -156,20 +174,6 @@ export const RecordView = ({ patientId }: { patientId: string }) => {
         { id: "audit", label: t("record.audit") },
       ]
     : [{ id: "overview", label: t("record.overview") }];
-
-  const grantBreakGlass = async () => {
-    try {
-      await api.breakGlass(patientId, breakGlassReason);
-      setBreakGlassNeeded(false);
-      setBreakGlassReason("");
-      setGate(null);
-      await loadCore();
-      await loadClinical();
-      toast(t("record.breakGlassConfirm"), "warning");
-    } catch (err) {
-      toast(err instanceof ApiProblem ? err.message : t("common.error"), "danger");
-    }
-  };
 
   return (
     <section aria-label={patient.fullName}>
