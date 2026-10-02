@@ -12,6 +12,8 @@ export {
   hashIp,
   generateCsrfToken,
   sha256,
+  usesPrimaryEnvelope,
+  activeEncryptionKeyId,
 } from "./crypto.js";
 export { loadEnv, envSchema, type Env } from "./env.js";
 

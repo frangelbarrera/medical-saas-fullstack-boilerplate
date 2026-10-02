@@ -19,6 +19,7 @@ import {
   AuthRepository,
   encryptPHI,
   decryptPHI,
+  loadEnv,
   REFRESH_TOKEN_TTL_MS,
   SESSION_TTL_MS,
   Repositories,
@@ -28,6 +29,7 @@ import { validateBody } from "../middleware/validate.js";
 import { authLimiter } from "../middleware/security.js";
 import { issueAccessToken, readSessionCookie, readRefreshCookie, verifyAccessToken, generateCsrfToken } from "../lib/tokens.js";
 import { generateTotpSecret, verifyTotp, otpauthUri } from "../lib/totp.js";
+import { isRequestSecure } from "../lib/cookies.js";
 import {
   cookieOptions,
   csrfCookieOptions,
@@ -67,6 +69,12 @@ authRouter.post(
   authLimiter,
   validateBody(loginRequest),
   asyncHandler(async (req, res) => {
+    // Production sessions are HTTPS-only (TLS-001): credentials and session
+    // cookies never traverse plain HTTP. req.secure reflects the EXPLICIT
+    // TRUST_PROXY configuration, so spoofed forwarded headers are ignored.
+    if (loadEnv().NODE_ENV === "production" && !isRequestSecure(req)) {
+      throw new ApiError(403, "FORBIDDEN", "Sign-in requires an HTTPS connection");
+    }
     const { username, password, deviceLabel, totp } = req.body as {
       username: string;
       password: string;

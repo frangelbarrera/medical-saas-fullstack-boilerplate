@@ -12,9 +12,7 @@ import rateLimit from "express-rate-limit";
 import cors from "cors";
 import type { Request } from "express";
 import { loadEnv } from "@medical/data";
-import { problem } from "@medical/contracts";
-
-const message = (title: string) => problem("RATE_LIMITED", title, 429);
+import { storeFor, rateLimitHandler } from "../lib/rate-store.js";
 
 /**
  * Test scale factor: the integration suites drive hundreds of authenticated
@@ -39,7 +37,8 @@ export const globalLimiter = rateLimit({
   max: 500 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
-  message: [message("Too many requests, please try again later")],
+  store: storeFor("global"),
+  handler: rateLimitHandler(15 * 60, "Too many requests, please try again later"),
 });
 
 export const authLimiter = rateLimit({
@@ -47,7 +46,16 @@ export const authLimiter = rateLimit({
   max: 20 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
-  message: [message("Too many sign-in attempts, please try again later")],
+  store: storeFor("auth"),
+  handler: rateLimitHandler(15 * 60, "Too many sign-in attempts, please try again later"),
+  // Enumeration protection (RL-003): the budget pairs the source IP with
+  // the attempted account, so spraying many usernames from one IP or
+  // hammering one username from many IPs both exhaust quickly.
+  keyGenerator: (req: Request): string => {
+    const body = req.body as { username?: unknown } | undefined;
+    const username = typeof body?.username === "string" ? body.username.trim().toLowerCase() : "anonymous";
+    return `${req.ip ?? "unknown"}:${username}`;
+  },
 });
 
 export const searchLimiter = rateLimit({
@@ -55,7 +63,8 @@ export const searchLimiter = rateLimit({
   max: 200 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
-  message: [message("Search rate limit reached, please slow down")],
+  store: storeFor("search"),
+  handler: rateLimitHandler(15 * 60, "Search rate limit reached, please slow down"),
 });
 
 export const aiLimiter = rateLimit({
@@ -63,7 +72,8 @@ export const aiLimiter = rateLimit({
   max: 40 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
-  message: [message("AI rate limit reached, please try again later")],
+  store: storeFor("ai"),
+  handler: rateLimitHandler(15 * 60, "AI rate limit reached, please try again later"),
 });
 
 export const exportLimiter = rateLimit({
@@ -71,7 +81,8 @@ export const exportLimiter = rateLimit({
   max: 10 * limitScale,
   standardHeaders: true,
   legacyHeaders: false,
-  message: [message("Export limit reached for this hour")],
+  store: storeFor("export"),
+  handler: rateLimitHandler(60 * 60, "Export limit reached for this hour"),
 });
 
 const prodCsp = {
@@ -111,13 +122,28 @@ export const helmetMiddleware = helmet({
   },
 });
 
-/** TRUST_PROXY env: comma-free single number or list, applied to app.set(). */
+/**
+ * TRUST_PROXY configuration (TLS-001): the deployment names exactly the
+ * proxies it runs behind. Supported values: "false"/"" (none), a hop count
+ * ("1"), or a comma-separated list of IPs / CIDR ranges passed to Express.
+ * The blanket "true" is refused in production - a deployment must declare
+ * its proxy chain, otherwise x-forwarded-proto becomes client-controlled.
+ */
 export const parseTrustProxy = (): string | number | boolean => {
   const raw = loadEnv().TRUST_PROXY;
   if (raw === "" || raw === "false") return false;
-  if (raw === "true") return true;
+  if (raw === "true") {
+    if (loadEnv().NODE_ENV === "production") {
+      throw new Error(
+        "TRUST_PROXY=true is not allowed in production: list your proxies explicitly (e.g. TRUST_PROXY=10.0.0.5,10.0.0.6)",
+      );
+    }
+    return true;
+  }
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : 1;
+  if (Number.isFinite(n) && n >= 0) return n;
+  // Explicit list or CIDR range - forwarded verbatim to Express.
+  return raw;
 };
 
 export const securityHeaders = (_req: Request, res: { setHeader: (k: string, v: string) => void }, next: () => void): void => {

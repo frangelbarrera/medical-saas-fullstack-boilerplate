@@ -131,6 +131,11 @@ export interface AuditVerification {
   verifiedCount: number;
   legacyCount: number;
   firstBrokenAt: string | null;
+  /** Per-clinic chain index has no holes (detects row deletion even when
+   *  hashes are recomputed). */
+  continuityValid: boolean;
+  continuityGaps: number;
+  firstGapIndex: number | null;
 }
 
 export const auditQuery = z.object({

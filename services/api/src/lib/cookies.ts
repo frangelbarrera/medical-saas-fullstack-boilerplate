@@ -1,5 +1,11 @@
 /**
- * Cookie helpers that respect the request protocol.
+ * Cookie helpers that respect the request protocol (TLS-001).
+ *
+ * Trust in proxy headers is EXPLICIT: `x-forwarded-proto` is only believed
+ * when the request actually arrived through a proxy that `TRUST_PROXY`
+ * declared trustworthy - Express then reflects that in `req.secure`. The
+ * raw header is never trusted on its own, so a client cannot flip its own
+ * request to "secure".
  *
  * `__Host-` prefixes are used in production over HTTPS only (the prefix
  * requires Secure cookies; using it on plain HTTP would silently break the
@@ -9,13 +15,7 @@
 import type { Request } from "express";
 import { loadEnv } from "@medical/data";
 
-export const isRequestSecure = (req: Request): boolean => {
-  if (req.secure) return true;
-  const forwardedProto = req.get("x-forwarded-proto");
-  if (forwardedProto === "https") return true;
-  if (req.get("x-forwarded-ssl") === "on") return true;
-  return false;
-};
+export const isRequestSecure = (req: Request): boolean => req.secure;
 
 export const isProdHttps = (req: Request): boolean =>
   loadEnv().NODE_ENV === "production" && isRequestSecure(req);

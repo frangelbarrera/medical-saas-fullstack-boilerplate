@@ -12,6 +12,16 @@ export const envSchema = z.object({
   ENCRYPTION_KEY: z
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, "ENCRYPTION_KEY must be 64 hex chars"),
+  // Optional envelope key set for rotation (KEY-001): 'id1:hex64,id2:hex64'.
+  // The first entry is the primary (writes); ENCRYPTION_KEY stays as the
+  // legacy-read key until the re-encryption job completes.
+  ENCRYPTION_KEYS: z
+    .string()
+    .regex(
+      /^[A-Za-z0-9_-]+:[0-9a-fA-F]{64}(,[A-Za-z0-9_-]+:[0-9a-fA-F]{64})*$/,
+      "ENCRYPTION_KEYS must be comma-separated id:hex64 pairs",
+    )
+    .optional(),
   PHI_HMAC_KEY: z
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, "PHI_HMAC_KEY must be 64 hex chars"),

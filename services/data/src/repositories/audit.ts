@@ -61,7 +61,7 @@ export class AuditRepository {
     const prev = await this.tx.auditLog.findFirst({
       where: { clinicId },
       orderBy: { seq: "desc" },
-      select: { hash: true },
+      select: { hash: true, chainIndex: true },
     });
 
     const createdAt = new Date();
@@ -84,6 +84,9 @@ export class AuditRepository {
     await this.tx.auditLog.create({
       data: {
         clinicId,
+        // Per-clinic position: written under the advisory lock so the
+        // continuity check can rely on 0..N-1 with no holes.
+        chainIndex: (prev?.chainIndex ?? -1) + 1,
         action: input.action,
         category: input.category,
         actorId: input.actorId ?? null,
@@ -154,6 +157,28 @@ export class AuditRepository {
     };
   }
 
+  /**
+   * Continuity check (AUD-001): the per-clinic chain index must be exactly
+   * 0..N-1. A deleted row leaves a hole that stays visible even when an
+   * attacker recomputes the hashes of the remaining chain.
+   */
+  async verifyContinuity(clinicId: string): Promise<{ continuityValid: boolean; continuityGaps: number; firstGapIndex: number | null }> {
+    const rows = await this.tx.auditLog.findMany({
+      where: { clinicId },
+      orderBy: { chainIndex: "asc" },
+      select: { chainIndex: true },
+    });
+    let firstGapIndex: number | null = null;
+    for (let i = 0; i < rows.length; i += 1) {
+      if (rows[i]!.chainIndex !== i) {
+        firstGapIndex = i;
+        break;
+      }
+    }
+    const continuityGaps = firstGapIndex === null ? 0 : rows.length - firstGapIndex;
+    return { continuityValid: firstGapIndex === null, continuityGaps, firstGapIndex };
+  }
+
   async verifyChain(clinicId: string): Promise<AuditVerification> {
     const rows = await this.tx.auditLog.findMany({
       where: { clinicId },
@@ -177,6 +202,7 @@ export class AuditRepository {
     let expectedPrev: string | null = null;
     let verified = 0;
     let legacy = 0;
+    const continuity = await this.verifyContinuity(clinicId);
 
     for (const r of rows) {
       const details = (r.details ?? {}) as Record<string, unknown>;
@@ -208,13 +234,20 @@ export class AuditRepository {
           verifiedCount: verified,
           legacyCount: legacy,
           firstBrokenAt: r.createdAt.toISOString(),
+          ...continuity,
         };
       }
       expectedPrev = r.hash;
       verified += 1;
     }
 
-    return { valid: true, verifiedCount: verified, legacyCount: legacy, firstBrokenAt: null };
+    return {
+      valid: true,
+      verifiedCount: verified,
+      legacyCount: legacy,
+      firstBrokenAt: null,
+      ...continuity,
+    };
   }
 
   async exportForPatient(clinicId: string, patientId: string): Promise<AuditEvent[]> {

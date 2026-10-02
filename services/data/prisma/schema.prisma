@@ -867,6 +867,7 @@ model RefreshToken {
 model AuditLog {
   id               String   @id @default(uuid())
   seq              Int      @unique @default(autoincrement()) // global monotonic insertion order (per-clinic chain walk)
+  chainIndex       Int      @map("chain_index") // per-clinic position in the hash chain; continuity = no holes
   clinicId         String   @map("clinic_id")
   actorId          String?  @map("actor_id")
   actorRole        String?  @map("actor_role")
