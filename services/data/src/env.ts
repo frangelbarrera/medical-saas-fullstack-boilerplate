@@ -38,6 +38,10 @@ export const envSchema = z.object({
   LLM_DATA_RESIDENCY: z.string().optional(),
   LLM_ZERO_RETENTION: z.string().optional(),
   LLM_DPIA_RECORDED: z.string().optional(),
+  // Approved model ids (AI-002, fail-closed): comma-separated allowlist of
+  // the model versions this deployment may call. Unset keeps the provider
+  // default for non-passthrough modes.
+  LLM_ALLOWED_MODELS: z.string().optional(),
   // SMART App Launch authorization server (INT-001): when set, the discovery
   // document advertises its authorize/token endpoints. Unset means the
   // deployment exposes no SMART authorization yet (mapping layer only).

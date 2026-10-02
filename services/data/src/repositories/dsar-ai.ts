@@ -10,6 +10,7 @@
 import crypto from "crypto";
 import type { Tx } from "../client.js";
 import { decryptPHI } from "../crypto.js";
+import { DomainError } from "@medical/domain";
 import type {
   AiDraft,
   DsarRequest,
@@ -442,55 +443,16 @@ export class DsarRepository {
 export class AiRepository {
   constructor(private tx: Tx) {}
 
-  async activePrompt(clinicId: string, name: string): Promise<PromptTemplate | null> {
-    const p = await this.tx.promptTemplate.findFirst({
-      where: { clinicId, name, isActive: true },
-      orderBy: { version: "desc" },
-    });
-    return p ? this.promptDto(p) : null;
-  }
-
-  async upsertPrompt(
-    clinicId: string,
-    input: { name: string; template: string; purpose?: string },
-  ): Promise<PromptTemplate> {
-    const latest = await this.tx.promptTemplate.findFirst({
-      where: { clinicId, name: input.name },
-      orderBy: { version: "desc" },
-    });
-    // New revisions never overwrite history: create a new version and flip
-    // the previous one inactive (auditable prompt registry, AI-001).
-    if (latest) {
-      await this.tx.promptTemplate.update({ where: { id: latest.id }, data: { isActive: false } });
-    }
-    const p = await this.tx.promptTemplate.create({
-      data: {
-        clinicId,
-        name: input.name,
-        version: (latest?.version ?? 0) + 1,
-        purpose: input.purpose ?? latest?.purpose ?? "",
-        template: input.template,
-        isActive: true,
-      },
-    });
-    return this.promptDto(p);
-  }
-
-  async listPrompts(clinicId: string): Promise<PromptTemplate[]> {
-    const rows = await this.tx.promptTemplate.findMany({
-      where: { clinicId, isActive: true },
-      orderBy: { name: "asc" },
-    });
-    return rows.map((p) => this.promptDto(p));
-  }
-
   private promptDto(p: {
     id: string;
     name: string;
     version: number;
     purpose: string;
     template: string;
-    isActive: boolean;
+    state: string;
+    submittedById: string | null;
+    approvedById: string | null;
+    approvedAt: Date | null;
     updatedAt: Date;
   }): PromptTemplate {
     return {
@@ -499,9 +461,107 @@ export class AiRepository {
       version: p.version,
       purpose: p.purpose,
       template: p.template,
-      isActive: p.isActive,
+      state: p.state as PromptTemplate["state"],
+      submittedById: p.submittedById,
+      approvedById: p.approvedById,
+      approvedAt: p.approvedAt?.toISOString() ?? null,
       updatedAt: p.updatedAt.toISOString(),
     };
+  }
+
+  private async promptById(clinicId: string, id: string) {
+    const p = await this.tx.promptTemplate.findFirst({ where: { clinicId, id } });
+    return p;
+  }
+
+  /** The version currently serving traffic (state ACTIVE). */
+  async activePrompt(clinicId: string, name: string): Promise<PromptTemplate | null> {
+    const p = await this.tx.promptTemplate.findFirst({
+      where: { clinicId, name, state: "ACTIVE" },
+      orderBy: { version: "desc" },
+    });
+    return p ? this.promptDto(p) : null;
+  }
+
+  /**
+    * Creates a new DRAFT version. Existing versions - including the active
+    * one - are never mutated (AI-003): every change is a new version.
+    */
+  async upsertPrompt(
+    clinicId: string,
+    input: { name: string; template: string; purpose?: string },
+  ): Promise<PromptTemplate> {
+    const latest = await this.tx.promptTemplate.findFirst({
+      where: { clinicId, name: input.name },
+      orderBy: { version: "desc" },
+    });
+    const p = await this.tx.promptTemplate.create({
+      data: {
+        clinicId,
+        name: input.name,
+        version: (latest?.version ?? 0) + 1,
+        purpose: input.purpose ?? latest?.purpose ?? "",
+        template: input.template,
+        state: "DRAFT",
+      },
+    });
+    return this.promptDto(p);
+  }
+
+  /** DRAFT -> PENDING_APPROVAL, recorded against the submitting author. */
+  async submitPrompt(clinicId: string, id: string, actorId: string): Promise<PromptTemplate | null> {
+    const p = await this.promptById(clinicId, id);
+    if (!p || p.state !== "DRAFT") return null;
+    const updated = await this.tx.promptTemplate.update({
+      where: { id },
+      data: { state: "PENDING_APPROVAL", submittedById: actorId },
+    });
+    return this.promptDto(updated);
+  }
+
+  /**
+    * PENDING_APPROVAL -> ACTIVE under dual control: the approver must
+    * differ from the submitter. The previous ACTIVE version retires in the
+    * same transaction so exactly one version serves traffic per name.
+    */
+  async approvePrompt(clinicId: string, id: string, approverId: string): Promise<PromptTemplate | null> {
+    const p = await this.promptById(clinicId, id);
+    if (!p || p.state !== "PENDING_APPROVAL") return null;
+    if (p.submittedById && p.submittedById === approverId) {
+      throw new DomainError(
+        "UNPROCESSABLE",
+        "A prompt version must be approved by someone other than its author",
+      );
+    }
+    await this.tx.promptTemplate.updateMany({
+      where: { clinicId, name: p.name, state: "ACTIVE" },
+      data: { state: "RETIRED", isActive: false },
+    });
+    const updated = await this.tx.promptTemplate.update({
+      where: { id },
+      data: { state: "ACTIVE", isActive: true, approvedById: approverId, approvedAt: new Date() },
+    });
+    return this.promptDto(updated);
+  }
+
+  /** ACTIVE -> RETIRED; the name falls back to defaults until re-activated. */
+  async retirePrompt(clinicId: string, id: string): Promise<PromptTemplate | null> {
+    const p = await this.promptById(clinicId, id);
+    if (!p || p.state !== "ACTIVE") return null;
+    const updated = await this.tx.promptTemplate.update({
+      where: { id },
+      data: { state: "RETIRED", isActive: false },
+    });
+    return this.promptDto(updated);
+  }
+
+  /** Full version history for the registry console (states included). */
+  async listPrompts(clinicId: string): Promise<PromptTemplate[]> {
+    const rows = await this.tx.promptTemplate.findMany({
+      where: { clinicId },
+      orderBy: [{ name: "asc" }, { version: "desc" }],
+    });
+    return rows.map((p) => this.promptDto(p));
   }
 
   async saveDraft(

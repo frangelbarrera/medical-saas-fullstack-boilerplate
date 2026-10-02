@@ -19,6 +19,10 @@ export interface SessionClaims {
   sid: string; // session id
   tid: string; // tenant (clinic) id
   role: string; // role at issue time (hint only)
+  /** SMART on FHIR scopes (INT-001): space-separated, when token-issued. */
+  scopes?: string;
+  /** Patient context for patient-scoped SMART tokens. */
+  patient?: string;
 }
 
 export const issueAccessToken = (claims: SessionClaims): string =>
@@ -28,9 +32,16 @@ export const verifyAccessToken = (token: string): SessionClaims | null => {
   try {
     const decoded = jwt.verify(token, loadEnv().JWT_SECRET);
     if (typeof decoded === "string") return null;
-    const { sub, sid, tid, role } = decoded as Record<string, unknown>;
+    const { sub, sid, tid, role, scopes, patient } = decoded as Record<string, unknown>;
     if (typeof sub !== "string" || typeof sid !== "string" || typeof tid !== "string") return null;
-    return { sub, sid, tid, role: typeof role === "string" ? role : "" };
+    return {
+      sub,
+      sid,
+      tid,
+      role: typeof role === "string" ? role : "",
+      scopes: typeof scopes === "string" ? scopes : undefined,
+      patient: typeof patient === "string" ? patient : undefined,
+    };
   } catch {
     return null;
   }

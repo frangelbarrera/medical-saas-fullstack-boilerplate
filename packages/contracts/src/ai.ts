@@ -54,12 +54,22 @@ export const promptTemplateInput = z.object({
 });
 export type PromptTemplateInput = z.infer<typeof promptTemplateInput>;
 
+/**
+ * Prompt lifecycle states (AI-003): versions are immutable and move through
+ * a dual-control flow - the author submits, a different administrator
+ * approves, activation retires the previous active version.
+ */
+export const PROMPT_STATES = ["DRAFT", "PENDING_APPROVAL", "ACTIVE", "RETIRED"] as const;
+
 export interface PromptTemplate {
   id: string;
   name: string;
   version: number;
   purpose: string;
   template: string;
-  isActive: boolean;
+  state: (typeof PROMPT_STATES)[number];
+  submittedById: string | null;
+  approvedById: string | null;
+  approvedAt: string | null;
   updatedAt: string;
 }

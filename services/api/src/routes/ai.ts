@@ -8,19 +8,49 @@ import {
   chatRequest,
   promptTemplateInput,
 } from "@medical/contracts";
-import { withTenantRepos, loadEnv } from "@medical/data";
+import { withTenantRepos, withTenant, loadEnv, AuditRepository } from "@medical/data";
 import { asyncHandler, ApiError } from "../middleware/errors.js";
 import { validateBody } from "../middleware/validate.js";
 import { authenticate, requireCapability, type AuthedRequest } from "../middleware/auth.js";
 import { assertClinicalAccess } from "../lib/access.js";
-import { sanitizeFreeText, GeminiProvider, DEFAULT_PROMPTS } from "@medical/integrations";
+import { sanitizeFreeText, detectPromptInjection, GeminiProvider, DEFAULT_PROMPTS } from "@medical/integrations";
 import { aiLimiter } from "../middleware/security.js";
 export const aiRouter = Router();
 
+/**
+ * Provider factory with model governance (AI-002): the deployment pins the
+ * approved model ids in LLM_ALLOWED_MODELS; an unset allowlist keeps the
+ * provider's default. The allowlist check is fail-closed.
+ */
 const provider = (): InstanceType<typeof GeminiProvider> | null => {
   const env = loadEnv();
   if (!env.GEMINI_API_KEY) return null;
-  return new GeminiProvider(env.GEMINI_API_KEY);
+  const allowed = (env.LLM_ALLOWED_MODELS ?? "").split(",").map((m) => m.trim()).filter(Boolean);
+  const instance = new GeminiProvider(env.GEMINI_API_KEY);
+  if (allowed.length > 0 && !allowed.includes(instance.model)) {
+    throw new ApiError(503, "AI_PROVIDER_UNAVAILABLE", "The configured model is not on this deployment's approved list");
+  }
+  return instance;
+};
+
+/** Screen free text for instruction-override attempts (AI-002). */
+const assertNoPromptInjection = async (
+  ctx: NonNullable<AuthedRequest["ctx"]>,
+  surface: string,
+  texts: (string | null | undefined)[],
+): Promise<void> => {
+  if (!texts.some((t) => detectPromptInjection(t))) return;
+  // The blocked attempt is recorded in its OWN transaction: the request
+  // transaction rolls back with the 422, the security signal must not.
+  await withTenant(
+    { clinicId: ctx.tenantId, actorId: ctx.actorId, actorRole: ctx.actorRole },
+    (tx) => new AuditRepository(tx).append(ctx, { action: "AI_INJECTION_BLOCKED", category: "AI", details: { surface } }),
+  ).catch(() => undefined);
+  throw new ApiError(
+    422,
+    "UNPROCESSABLE",
+    "The text contains instruction-override patterns and was not sent to the AI provider",
+  );
 };
 
 aiRouter.post(
@@ -40,6 +70,8 @@ aiRouter.post(
       if (encounter.status === "SIGNED") {
         throw new ApiError(409, "INVALID_STATE_TRANSITION", "Signed notes cannot be re-drafted");
       }
+      // Instruction-override screening runs before any provider call (AI-002).
+      await assertNoPromptInjection(ctx, "scribe", [encounter.chiefComplaint, encounter.observations, encounter.plan]);
       // AI_PROCESSING consent gate (AI-001), fail-closed: AI processing of
       // health data needs a positive legal basis. Missing, REFUSED and
       // EXPIRED consents all block generation - absence of refusal is never
@@ -194,6 +226,8 @@ aiRouter.post(
     const env = loadEnv();
 
     const result = await withTenantRepos(ctx, async (repos) => {
+      // Instruction-override screening before the provider call (AI-002).
+      await assertNoPromptInjection(ctx, "chat", [message]);
       const ai = provider();
       if (!ai) throw new ApiError(503, "AI_NOT_ENABLED", "AI features are not configured on this deployment");
 
@@ -252,6 +286,12 @@ aiRouter.get(
   }),
 );
 
+/**
+ * Prompt registry lifecycle (AI-003). Creating a version never touches the
+ * active one; the author submits for approval; a DIFFERENT administrator
+ * approves; activation retires the previous active version. Every step is
+ * audited, and the version history stays immutable.
+ */
 aiRouter.put(
   "/ai/prompts/:name",
   authenticate,
@@ -265,10 +305,36 @@ aiRouter.put(
         action: "PROMPT_UPDATED",
         category: "AI",
         target: prompt.id,
-        details: { name: prompt.name, version: prompt.version },
+        details: { name: prompt.name, version: prompt.version, state: prompt.state },
       });
       return prompt;
     });
-    res.json(updated);
+    res.status(201).json(updated);
   }),
 );
+
+const promptTransition = (action: "SUBMIT" | "APPROVE" | "RETIRE") =>
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    const prompt = await withTenantRepos(ctx, async (repos) => {
+      const result =
+        action === "SUBMIT"
+          ? await repos.ai.submitPrompt(ctx.tenantId, req.params.id, ctx.actorId)
+          : action === "APPROVE"
+            ? await repos.ai.approvePrompt(ctx.tenantId, req.params.id, ctx.actorId)
+            : await repos.ai.retirePrompt(ctx.tenantId, req.params.id);
+      if (!result) throw new ApiError(404, "NOT_FOUND", "Prompt version not found or not in a transitionable state");
+      await repos.audit.append(ctx, {
+        action: action === "SUBMIT" ? "PROMPT_SUBMITTED" : action === "APPROVE" ? "PROMPT_APPROVED" : "PROMPT_RETIRED",
+        category: "AI",
+        target: result.id,
+        details: { name: result.name, version: result.version, state: result.state },
+      });
+      return result;
+    });
+    res.json(prompt);
+  });
+
+aiRouter.post("/ai/prompts/:id/submit", authenticate, requireCapability("admin:integrations"), promptTransition("SUBMIT"));
+aiRouter.post("/ai/prompts/:id/approve", authenticate, requireCapability("admin:integrations"), promptTransition("APPROVE"));
+aiRouter.post("/ai/prompts/:id/retire", authenticate, requireCapability("admin:integrations"), promptTransition("RETIRE"));

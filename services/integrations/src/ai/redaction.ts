@@ -90,3 +90,24 @@ export const sanitizeFreeText = (text: string, mode: PhiMode): string => {
 
 /** Deterministic marker added to assistant replies for auditability. */
 export const AI_DISCLOSURE = "Generated with AI assistance - clinician review required.";
+
+/**
+ * Prompt-injection screening (AI-002): the model only ever sees de-identified
+ * or approved-passthrough content, but the CONTENT itself can carry
+ * instructions aimed at the model. Free-text inputs are screened against
+ * known instruction-override patterns and blocked before any provider call.
+ */
+const INJECTION_PATTERNS: RegExp[] = [
+  /ignore\s+(?:all\s+)?(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|rules?)/i,
+  /disregard\s+(?:all\s+)?(?:previous|prior|above|your)\s+(?:instructions?|prompts?|rules?)/i,
+  /(?:new|updated|revised)\s+(?:system\s+)?instructions?\s*:/i,
+  /system\s+prompt\s*[:=]/i,
+  /you\s+are\s+now\s+(?:a|an|the)\s+/i,
+  /(?:reveal|show|print|repeat)\s+(?:your\s+)?(?:system\s+prompt|instructions)/i,
+  /<\|?(?:im_start|system|endoftext)\|?>/i,
+];
+
+export const detectPromptInjection = (text: string | null | undefined): boolean => {
+  if (!text) return false;
+  return INJECTION_PATTERNS.some((re) => re.test(text));
+};

@@ -9,6 +9,7 @@ import { withTenantRepos, loadEnv } from "@medical/data";
 import { assertPatientScope } from "@medical/domain";
 import { asyncHandler, ApiError } from "../middleware/errors.js";
 import { authenticate, requireCapability, type AuthedRequest } from "../middleware/auth.js";
+import { fhirScope } from "../lib/fhir-scopes.js";
 import {
   bundle as fhirBundle,
   toFhirPatient,
@@ -18,6 +19,7 @@ import {
   toFhirProvenance,
   smartConfiguration,
 } from "@medical/integrations";
+import { PURPOSES } from "@medical/audit";
 export const fhirRouter = Router();
 
 const BASE_URL = () => loadEnv().FRONTEND_URL;
@@ -44,10 +46,14 @@ fhirRouter.get(
 fhirRouter.get(
   "/fhir/Patient/:id",
   authenticate,
+  fhirScope("Patient"),
   requireCapability("clinical:read"),
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const purposeOfUse = typeof req.query.purposeOfUse === "string" ? req.query.purposeOfUse : "TREATMENT";
+    if (!(PURPOSES as readonly string[]).includes(purposeOfUse)) {
+      throw new ApiError(400, "VALIDATION_FAILED", "purposeOfUse must be one of the documented values");
+    }
     const resource = await withTenantRepos(ctx, async (repos) => {
       const patient = await repos.patients.findById(ctx.tenantId, req.params.id);
       if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
@@ -108,6 +114,7 @@ fhirRouter.get(
 fhirRouter.get(
   "/fhir/Patient",
   authenticate,
+  fhirScope("Patient"),
   requireCapability("patients:read"),
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
@@ -165,6 +172,7 @@ fhirRouter.get(
 fhirRouter.get(
   "/fhir/AuditEvent",
   authenticate,
+  fhirScope("AuditEvent"),
   requireCapability("audit:read"),
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
@@ -204,6 +212,7 @@ fhirRouter.get(
 fhirRouter.get(
   "/fhir/Provenance",
   authenticate,
+  fhirScope("Provenance"),
   requireCapability("audit:read"),
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;

@@ -10,7 +10,7 @@ import { capabilitiesForRole, isSelfScoped, type Capability, type Role } from "@
 import { prisma, withTenant } from "@medical/data";
 import type { RequestContext } from "@medical/domain";
 import { ApiError } from "./errors.js";
-import { readSessionCookie, verifyAccessToken } from "../lib/tokens.js";
+import { readSessionCookie, verifyAccessToken, type SessionClaims } from "../lib/tokens.js";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -22,6 +22,8 @@ export interface AuthedRequest extends Request {
   ctx?: RequestContext;
   /** Session-level step-up timestamp: when the last re-authentication happened. */
   stepUpAt?: Date | null;
+  /** Raw verified token claims: carries SMART scopes and patient context. */
+  claims?: SessionClaims | null;
 }
 
 export const authenticate = (req: AuthedRequest, _res: Response, next: NextFunction): void => {
@@ -68,6 +70,7 @@ export const authenticate = (req: AuthedRequest, _res: Response, next: NextFunct
       capabilities: capabilitiesForRole(role) as Capability[],
     };
     req.stepUpAt = session.stepUpAt;
+    req.claims = claims;
     next();
   })().catch(next);
 };

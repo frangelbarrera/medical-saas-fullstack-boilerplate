@@ -191,6 +191,92 @@ describe("user administration final state (ADM-001/ADM-002)", () => {
   });
 });
 
+describe("prompt registry lifecycle (AI-003)", () => {
+  let secondAdminId = "";
+
+  beforeAll(async () => {
+    // A second active administrator so the dual-control flow has two people.
+    const created = await withTenant({ clinicId: CLINIC, actorId: "tester", actorRole: "ADMIN" }, async (tx) =>
+      tx.user.create({
+        data: {
+          clinicId: CLINIC,
+          username: "promptadmin2",
+          passwordHash: bcrypt.hashSync(PASSWORD, 4),
+          fullName: "Prompt Second Admin",
+          role: "ADMIN",
+        },
+      }),
+    );
+    secondAdminId = created.id;
+    await login("admin", "admintest");
+  });
+
+  it("keeps versions immutable and activates only through dual control", async () => {
+    const create = await request(app)
+      .put("/api/v1/ai/prompts/SCRIBE_NOTE")
+      .set(authHeaders("admin"))
+      .send({ name: "SCRIBE_NOTE", template: "Draft the note from these findings: {{input}}", purpose: "scribe" });
+    expect(create.status).toBe(201);
+    const draftId = create.body.id as string;
+    expect(create.body.state).toBe("DRAFT");
+
+    // A draft is never served as the active prompt.
+    const earlyApprove = await request(app).post(`/api/v1/ai/prompts/${draftId}/approve`).set(authHeaders("admin"));
+    expect(earlyApprove.status).toBe(404);
+
+    const submit = await request(app).post(`/api/v1/ai/prompts/${draftId}/submit`).set(authHeaders("admin"));
+    expect(submit.status).toBe(200);
+    expect(submit.body.state).toBe("PENDING_APPROVAL");
+    expect(submit.body.submittedById).toBe(ids.admin);
+
+    // Self-approval is rejected: the approver must differ from the author.
+    const selfApprove = await request(app).post(`/api/v1/ai/prompts/${draftId}/approve`).set(authHeaders("admin"));
+    expect(selfApprove.status).toBe(422);
+
+    await login("promptadmin2", "promptadmin2");
+    const approve = await request(app).post(`/api/v1/ai/prompts/${draftId}/approve`).set(authHeaders("promptadmin2"));
+    expect(approve.status).toBe(200);
+    expect(approve.body.state).toBe("ACTIVE");
+    expect(approve.body.approvedById).toBe(secondAdminId);
+  });
+
+  it("retires the previous active version when a new one is approved", async () => {
+    await login("admin", "admintest");
+    const create = await request(app)
+      .put("/api/v1/ai/prompts/SCRIBE_NOTE")
+      .set(authHeaders("admin"))
+      .send({ name: "SCRIBE_NOTE", template: "Second version of the scribe template: {{input}}" });
+    expect(create.status).toBe(201);
+    const draftId = create.body.id as string;
+    await request(app).post(`/api/v1/ai/prompts/${draftId}/submit`).set(authHeaders("admin"));
+    const approve = await request(app).post(`/api/v1/ai/prompts/${draftId}/approve`).set(authHeaders("promptadmin2"));
+    expect(approve.status).toBe(200);
+
+    const versions = await request(app).get("/api/v1/ai/prompts").set(authHeaders("admin"));
+    const scribe = (versions.body.items as { name: string; version: number; state: string }[]).filter(
+      (p) => p.name === "SCRIBE_NOTE",
+    );
+    const active = scribe.filter((p) => p.state === "ACTIVE");
+    expect(active).toHaveLength(1);
+    expect(active[0].version).toBe(create.body.version);
+    expect(scribe.some((p) => p.state === "RETIRED")).toBe(true);
+  });
+
+  it("supports retiring the active version", async () => {
+    await login("admin", "admintest");
+    const create = await request(app)
+      .put("/api/v1/ai/prompts/CHAT_ASSISTANT")
+      .set(authHeaders("admin"))
+      .send({ name: "CHAT_ASSISTANT", template: "You are a clinic assistant. Answer concisely: {{input}}" });
+    expect(create.status).toBe(201);
+    await request(app).post(`/api/v1/ai/prompts/${create.body.id}/submit`).set(authHeaders("admin"));
+    await request(app).post(`/api/v1/ai/prompts/${create.body.id}/approve`).set(authHeaders("promptadmin2"));
+    const retire = await request(app).post(`/api/v1/ai/prompts/${create.body.id}/retire`).set(authHeaders("admin"));
+    expect(retire.status).toBe(200);
+    expect(retire.body.state).toBe("RETIRED");
+  });
+});
+
 describe("break-glass abuse controls (BG-001)", () => {
   it("caps concurrent emergency windows per actor", async () => {
     await login("admin", "admintest");
