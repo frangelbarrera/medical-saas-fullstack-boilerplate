@@ -90,6 +90,37 @@ NODE_ENV=production DATABASE_URL=... JWT_SECRET=... ENCRYPTION_KEY=... PHI_HMAC_
 Run under systemd (or your supervisor) with `Restart=on-failure`; the
 process exits on SIGTERM after draining connections.
 
+## Vercel (static SPA)
+
+The repository ships a `vercel.json` at the root so a fresh Vercel import
+works without touching the project settings:
+
+- `outputDirectory` points at `apps/web/dist` (the SPA workspace output);
+- the SPA rewrite serves `index.html` for every client-side route except
+  `/api/*`;
+- immutable cache headers for hashed `assets/` and baseline security
+  headers for everything else.
+
+The API is NOT hosted on Vercel - it is a long-running Express + Prisma
+service that needs PostgreSQL and governed keys (see Docker Compose or
+Bare metal above). Point the SPA at your API origin by building with an
+environment variable (Project Settings -> Environment Variables):
+
+```
+VITE_API_URL=https://api.clinic.example
+```
+
+Requirements for a working deployment:
+
+1. The API `FRONTEND_URL` must be the exact Vercel URL (e.g.
+   `https://medical-saas.vercel.app`) - it drives both CORS and the
+   production HTTPS-only cookie policy.
+2. Session cookies are `SameSite=Lax`, so the API must live on a
+   same-site domain (e.g. `api.clinic.example` for `clinic.example`).
+   A cross-site API origin cannot receive the session cookies.
+3. Never set `E2E_ALLOW_HTTP` on a real deployment; the production
+   sign-in guard requires TLS.
+
 ## Database roles and migrations
 
 - `medical_app` - runtime role. `CONNECT` + table grants from the RLS

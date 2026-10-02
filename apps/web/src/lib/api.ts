@@ -35,7 +35,13 @@ import type {
   SearchHit,
 } from "@medical/contracts";
 
-const BASE = "/api/v1";
+// API origin: relative by default (same-origin deployments, the Docker
+// image and the local dev server). Static hosts can point at a separate
+// API origin by building with VITE_API_URL, e.g.
+//   VITE_API_URL=https://api.clinic.example npm run build
+// The target origin must match the API's FRONTEND_URL and run on a
+// same-site domain - session cookies are SameSite=Lax (TLS-001).
+const BASE = `${import.meta.env.VITE_API_URL ?? ""}/api/v1`;
 
 export class ApiProblem extends Error {
   constructor(
