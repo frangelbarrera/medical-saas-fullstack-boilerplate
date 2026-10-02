@@ -34,6 +34,10 @@ Open a GitHub issue with the `enhancement` label:
 
 ## Development Setup
 
+The install flow is self-contained: `npm install` runs the Prisma client
+generation through the root `postinstall` hook, so a fresh checkout is ready
+for typecheck and the non-database test suites without extra steps.
+
 ```bash
 git clone https://github.com/frangelbarrera/medical-saas-fullstack-boilerplate.git
 cd medical-saas-fullstack-boilerplate
@@ -63,6 +67,25 @@ services/integrations  AI provider/redaction + FHIR mappings
 services/audit      Audit event catalog
 ops/                DB init + runbooks; scripts/ holds dev/E2E tooling
 ```
+```
+
+### Tests that need PostgreSQL
+
+Integration suites (API + tenant isolation) run against a real PostgreSQL
+with row-level security. They are gated on `TEST_DATABASE_URL`: when the
+variable is not set they skip with a notice instead of failing, so
+`npm test` stays green on a machine without a database. To run everything:
+
+```bash
+# 1. Start PostgreSQL and create the limited runtime role (no BYPASSRLS)
+psql "postgresql://postgres:${PGPASSWORD}@127.0.0.1:5432/postgres" \
+  -f ops/db/init/01-app-role.sql
+
+# 2. Apply migrations, then point the tests at it
+export DATABASE_URL="postgresql://postgres:${PGPASSWORD}@127.0.0.1:5432/medical_saas_test?schema=public"
+npx prisma migrate deploy --schema services/data/prisma/schema.prisma
+export TEST_DATABASE_URL="postgresql://medical_app:${PGPASSWORD_APP}@127.0.0.1:5432/medical_saas_test?schema=public"
+npm test
 ```
 
 ## Coding Standards

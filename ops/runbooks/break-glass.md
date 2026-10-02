@@ -16,11 +16,19 @@ strictly self-scoped.
    - actor, patient, reason, granted timestamp, 30-minute expiry
    - an audit event `BREAK_GLASS_USED` (category PHI, purpose EMERGENCY) in
      the tamper-evident chain.
-4. Clinical read endpoints (`summary`, `timeline`, `encounters`) accept the
-   administrator only while a non-expired break-glass row exists.
+4. EVERY clinical PHI surface accepts the administrator only while a
+   non-expired break-glass row exists: encounters (read + write + versions),
+   problems, allergies, medications, observations, summary, timeline, the
+   patient detail with decrypted contacts, and the FHIR surface
+   (Patient, AuditEvent, Provenance).
 
 ## Operating rules
 
+- The ROUTINE path is the care relationship: a doctor reaches a record
+  through an ACTIVE care-team membership or the primary-doctor assignment.
+  Book an appointment, document an encounter or assign the primary doctor -
+  the membership starts automatically. Break-glass is not a shortcut around
+  that model.
 - Break-glass is for emergencies and explicitly mandated access only.
 - Reviews: weekly, the security officer reads all `BREAK_GLASS_USED` events
   (`GET /api/v1/audit/events?action=BREAK_GLASS_USED`) and confirms each

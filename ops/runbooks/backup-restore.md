@@ -32,6 +32,14 @@ age --encrypt --recipient "$BACKUP_PUBLIC_KEY" \
 Retain per your jurisdiction's rules (20 years is a common medical-records
 horizon; verify with your cantonal requirements).
 
+## Verification drill tooling
+
+`ops/runbooks/verify-backup.sh` automates the proof that a backup is worth
+keeping: it checks the SHA-256 manifest, decrypts the artifact with the
+backup key, restores it into a scratch database and runs the audit-chain
+verification against the restored copy. Wire it into your scheduler so the
+drill runs unattended and alerts on failure.
+
 ## Restore drill (run quarterly, at minimum)
 
 ```bash

@@ -41,6 +41,60 @@ Highlights, all verified by the automated test suite:
 - **No mock runtime.** Production refuses to start without a reachable
   database; `/api/v1/health/ready` performs a real DB round-trip.
 
+## Governed access model (v2.1)
+
+The controls below close the gaps an authorization review identified in the
+v2 baseline. Every claim is backed by negative integration tests in
+`services/api/test/authorization.test.ts`.
+
+- **Care-team authorization (ABAC).** Clinical PHI is reachable only through
+  a treating relationship: DOCTOR needs an ACTIVE `CareTeamMembership` or the
+  primary-doctor assignment (`CARE_RELATIONSHIP_REQUIRED` otherwise);
+  assignments start automatically when an appointment is booked, an encounter
+  is documented or a primary doctor is set, and are managed through audited
+  care-team endpoints. ADMIN always needs the break-glass window; SECRETARY
+  never reaches clinical data; PATIENT stays self-scoped.
+- **Break-glass covers every PHI surface.** All clinical routes (reads AND
+  writes, encounters with their versions, problems, allergies, medications,
+  observations, summary, timeline), the patient detail with decrypted
+  contacts, and the FHIR surface enforce the same gate. A blocked detail
+  request returns only directory-visible `name`/`internalRef` meta so the
+  console can render the access gate without leaking contact PHI.
+- **Fail-closed AI consent.** Scribe generation requires the `AI_PROCESSING`
+  consent to be exactly `GRANTED`: missing, `REFUSED` and `EXPIRED` states
+  all block (422) and the block lands in the audit chain. Chat persists the
+  sanitized message, never the raw text. `LLM_PHI_MODE=passthrough` is
+  fail-closed: it silently downgrades to `redact` unless the deployment
+  records the signed DPA, approved provider, processing residency,
+  zero-retention commitment and completed DPIA (`LLM_*` env records).
+- **Governed DSAR release.** The direct export endpoint is retired (410).
+  Releasing subject data now requires: a fresh step-up re-authentication
+  (`POST /auth/step-up`, 5-minute privileged window), an AES-256-GCM
+  encrypted artifact (24h) with a SHA-256 integrity hash, a dual-control
+  approval where the approver differs from the requester, and a single-use
+  download token stored hash-only and consumed with a compare-and-set
+  update. `FULFILLED` requires the recorded approval.
+- **TOTP MFA.** RFC 6238 on node:crypto with a two-phase enrollment (the
+  secret is returned exactly once, activation confirms a code). Once
+  activated, the factor is demanded at login and at step-up; disabling it
+  requires the same proof. Secrets are encrypted at rest.
+- **Compliance packs.** `clinics.jurisdiction` selects a jurisdiction pack
+  (CH/EU/UK/US/CA/AU) exposed through `GET /admin/compliance`; packs are
+  configuration and documentation guidance, not legal certifications.
+- **SMART on FHIR evolution.** `/.well-known/smart-configuration` publishes
+  SMART App Launch scopes and capabilities; authorization endpoints appear
+  only when an external `SMART_AUTH_SERVER_URL` is configured. Patient
+  resources carry consent-driven `meta.security` labels (R/N), and
+  AuditEvent/Provenance projections expose the purpose of use from the
+  hash-chained audit trail.
+
+### Roadmap (honest gaps, not claims)
+
+WebAuthn/passkeys, distributed (Redis) rate limiting, verifiable/encrypted
+backups with automated restore drills (see `ops/runbooks/verify-backup.sh`)
+and a full SMART authorization server are documented next steps; the
+boilerplate does not claim them until they ship.
+
 ## Historical hardening log
 
 The sections below document past audits and fixes for transparency. They
