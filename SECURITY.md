@@ -287,7 +287,7 @@ help downstream users understand what was hardened.
 
 **Do not open public GitHub issues for security vulnerabilities.** Instead:
 
-1. Email **security@your-domain.com** (replace with your actual security contact).
+1. Email **frangelrcbarrera@gmail.com**.
 2. Include a detailed description of the vulnerability.
 3. Include steps to reproduce (PoC, screenshots, or curl commands).
 4. Mention the potential impact and any suggested mitigations.
@@ -455,7 +455,7 @@ Before deploying, verify:
 
 ## Contact
 
-For security questions or to report a vulnerability, contact **security@your-domain.com**.
+For security questions or to report a vulnerability, contact **frangelrcbarrera@gmail.com**.
 
 For general questions, open a GitHub issue.
 
