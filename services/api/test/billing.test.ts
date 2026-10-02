@@ -13,7 +13,7 @@ import { prisma, withTenant } from "@medical/data";
 
 const CLINIC = "clinic-billing";
 const PASSWORD = "BillingTest2026!";
-const SECRET = "test_webhook_secret_min_16_chars"; // matches tests/setup.ts
+const SECRET = process.env.PAYMENT_WEBHOOK_SECRET ?? "test_webhook_secret_min_16_chars";
 
 let app: Express;
 
