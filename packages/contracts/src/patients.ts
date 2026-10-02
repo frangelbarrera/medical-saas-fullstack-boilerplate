@@ -101,6 +101,32 @@ export const consentUpsert = z.object({
 export type ConsentUpsert = z.infer<typeof consentUpsert>;
 
 // ---------------------------------------------------------------------------
+// Care team (CLIN-004): the treating relationship between staff and patient.
+// Clinical access is granted through an ACTIVE membership (or a primary-doctor
+// assignment) plus break-glass for administrators - never through bare
+// capabilities alone.
+// ---------------------------------------------------------------------------
+
+export const CARE_TEAM_ROLES = ["CARING_DOCTOR", "CONSULTANT", "NURSE", "THERAPIST"] as const;
+
+export interface CareTeamMember {
+  id: string;
+  patientId: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  memberRole: (typeof CARE_TEAM_ROLES)[number];
+  startedAt: string;
+  endedAt: string | null;
+}
+
+export const careTeamAssign = z.object({
+  userId: z.string().uuid(),
+  memberRole: z.enum(CARE_TEAM_ROLES).default("CARING_DOCTOR"),
+});
+export type CareTeamAssign = z.infer<typeof careTeamAssign>;
+
+// ---------------------------------------------------------------------------
 // Payers
 // ---------------------------------------------------------------------------
 

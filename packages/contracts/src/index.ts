@@ -8,3 +8,4 @@ export * from "./clinical.js";
 export * from "./comms.js";
 export * from "./audit.js";
 export * from "./ai.js";
+export * from "./compliance.js";

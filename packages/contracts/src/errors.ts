@@ -15,6 +15,12 @@ export interface ProblemDetail {
   detail?: string;
   errors?: FieldError[];
   instance?: string;
+  /**
+   * Safe RFC 9457 extension members. Only directory-visible scalars may be
+   * attached here (e.g. name/internalRef so a client can render an access
+   * gate without receiving contact PHI).
+   */
+  meta?: Record<string, string | number | boolean | null>;
 }
 
 export interface FieldError {
@@ -41,6 +47,12 @@ export const ERROR_CODES = [
   "AI_NOT_ENABLED",
   "CONSENT_REQUIRED",
   "BREAK_GLASS_REQUIRED",
+  "CARE_RELATIONSHIP_REQUIRED",
+  "STEP_UP_REQUIRED",
+  "MFA_REQUIRED",
+  "MFA_INVALID_CODE",
+  "DSAR_APPROVAL_REQUIRED",
+  "ARTIFACT_UNAVAILABLE",
   "PAYLOAD_TOO_LARGE",
   "INTERNAL",
 ] as const;
@@ -51,7 +63,12 @@ export const problem = (
   code: ErrorCode,
   title: string,
   status: number,
-  extra?: { detail?: string; errors?: FieldError[]; instance?: string },
+  extra?: {
+    detail?: string;
+    errors?: FieldError[];
+    instance?: string;
+    meta?: Record<string, string | number | boolean | null>;
+  },
 ): ProblemDetail => ({
   type: `https://medical-saas.local/errors/${code.toLowerCase().replace(/_/g, "-")}`,
   title,

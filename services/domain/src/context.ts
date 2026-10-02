@@ -25,6 +25,12 @@ export class DomainError extends Error {
       | "CONFLICT"
       | "INVALID_STATE_TRANSITION"
       | "BREAK_GLASS_REQUIRED"
+      | "CARE_RELATIONSHIP_REQUIRED"
+      | "STEP_UP_REQUIRED"
+      | "MFA_REQUIRED"
+      | "MFA_INVALID_CODE"
+      | "DSAR_APPROVAL_REQUIRED"
+      | "ARTIFACT_UNAVAILABLE"
       | "CONSENT_REQUIRED"
       | "UNPROCESSABLE",
     message: string,

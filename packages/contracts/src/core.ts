@@ -34,8 +34,21 @@ export const loginRequest = z.object({
   username: z.string().min(1).max(100),
   password: z.string().min(1).max(200),
   deviceLabel: z.string().max(120).optional(),
+  /** TOTP second factor; required on login when the user enrolled MFA. */
+  totp: z.string().regex(/^\d{6}$/, "Expected a 6-digit code").optional(),
 });
 export type LoginRequest = z.infer<typeof loginRequest>;
+
+export const stepUpRequest = z.object({
+  password: z.string().min(1).max(200),
+  totp: z.string().regex(/^\d{6}$/, "Expected a 6-digit code").optional(),
+});
+export type StepUpRequest = z.infer<typeof stepUpRequest>;
+
+export const totpActivate = z.object({
+  code: z.string().regex(/^\d{6}$/, "Expected a 6-digit code"),
+});
+export type TotpActivate = z.infer<typeof totpActivate>;
 
 export interface SessionProfile {
   userId: string;

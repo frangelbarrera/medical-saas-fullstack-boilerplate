@@ -19,6 +19,11 @@ export const AUDIT_ACTIONS = [
   "AUTH_TOKEN_REUSE_DETECTED",
   "AUTH_PASSWORD_CHANGED",
   "AUTH_SESSION_REVOKED",
+  "AUTH_STEP_UP_SUCCESS",
+  "AUTH_STEP_UP_FAILURE",
+  "AUTH_MFA_ENROLLMENT_STARTED",
+  "AUTH_MFA_ACTIVATED",
+  "AUTH_MFA_DISABLED",
   // patients / PHI
   "PATIENT_CREATED",
   "PATIENT_UPDATED",
@@ -39,6 +44,8 @@ export const AUDIT_ACTIONS = [
   "MEDICATION_STATUS_CHANGED",
   "OBSERVATION_RECORDED",
   "BREAK_GLASS_USED",
+  "CARE_TEAM_ASSIGNED",
+  "CARE_TEAM_ENDED",
   // scheduling
   "APPOINTMENT_CREATED",
   "APPOINTMENT_UPDATED",
@@ -68,6 +75,11 @@ export const AUDIT_ACTIONS = [
   "DSAR_CREATED",
   "DSAR_FULFILLED",
   "DSAR_REJECTED",
+  "DSAR_ARTIFACT_PREPARED",
+  "DSAR_ARTIFACT_APPROVED",
+  "DSAR_DOWNLOAD_ISSUED",
+  "DSAR_DOWNLOAD_COMPLETED",
+  "DSAR_EXPORT_RETIRED",
   "AUDIT_VERIFIED",
   "AUDIT_EXPORTED",
   "FHIR_RESOURCE_EXPORTED",
@@ -155,6 +167,14 @@ export interface DsarRequest {
   createdById: string;
   createdByName: string | null;
   createdAt: string;
+  /** Governed release: encrypted artifact lifecycle. */
+  preparedAt: string | null;
+  artifactExpiresAt: string | null;
+  approvedAt: string | null;
+  approvedByName: string | null;
+  downloadIssuedAt: string | null;
+  downloadExpiresAt: string | null;
+  downloadedAt: string | null;
 }
 
 export interface PatientExportBundle {
@@ -163,6 +183,7 @@ export interface PatientExportBundle {
   patient: Record<string, unknown>;
   identifiers: Record<string, unknown>[];
   consents: Record<string, unknown>[];
+  careTeam: Record<string, unknown>[];
   encounters: Record<string, unknown>[];
   encounterVersions: Record<string, unknown>[];
   problems: Record<string, unknown>[];
@@ -173,5 +194,8 @@ export interface PatientExportBundle {
   invoices: Record<string, unknown>[];
   payments: Record<string, unknown>[];
   threads: Record<string, unknown>[];
+  aiDrafts: Record<string, unknown>[];
+  breakGlassEvents: Record<string, unknown>[];
+  dsarRequests: Record<string, unknown>[];
   auditEvents: Record<string, unknown>[];
 }
