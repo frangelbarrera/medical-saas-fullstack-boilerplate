@@ -107,9 +107,22 @@ const devCsp = {
   "connect-src": ["'self'", "ws:", "wss:"],
 };
 
+// Local E2E harness over loopback HTTP (TLS-001): identical to the
+// production CSP except that upgrade-insecure-requests would rewrite the
+// SPA's own requests to https:// and break the run. Only active when the
+// deployment explicitly opts in via E2E_ALLOW_HTTP=1.
+const prodCspHttpHarness: Record<string, string[]> = { ...prodCsp };
+delete prodCspHttpHarness["upgrade-insecure-requests"];
+
+const activeCsp = (): Record<string, string[]> => {
+  const env = loadEnv();
+  if (env.NODE_ENV !== "production") return devCsp;
+  return env.E2E_ALLOW_HTTP === "1" ? prodCspHttpHarness : prodCsp;
+};
+
 export const helmetMiddleware = helmet({
   contentSecurityPolicy: {
-    directives: loadEnv().NODE_ENV === "production" ? prodCsp : devCsp,
+    directives: activeCsp(),
   },
   crossOriginEmbedderPolicy: false,
   crossOriginOpenerPolicy: { policy: "same-origin" },

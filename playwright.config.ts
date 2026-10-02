@@ -35,6 +35,10 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       NODE_ENV: "production",
+      // Local harness opt-in (TLS-001): the production build runs over
+      // loopback HTTP here, so sign-in and CSP must not demand TLS for
+      // this process only. Real deployments keep E2E_ALLOW_HTTP unset.
+      E2E_ALLOW_HTTP: "1",
       PORT: "4099",
       DATABASE_URL:
         process.env.E2E_APP_URL ??

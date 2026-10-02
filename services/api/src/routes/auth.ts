@@ -72,7 +72,15 @@ authRouter.post(
     // Production sessions are HTTPS-only (TLS-001): credentials and session
     // cookies never traverse plain HTTP. req.secure reflects the EXPLICIT
     // TRUST_PROXY configuration, so spoofed forwarded headers are ignored.
-    if (loadEnv().NODE_ENV === "production" && !isRequestSecure(req)) {
+    // The only exception is the explicit local E2E harness (loopback
+    // Playwright runs against the production build); real deployments never
+    // set E2E_ALLOW_HTTP and keep the guard fully enforced.
+    const env = loadEnv();
+    if (
+      env.NODE_ENV === "production" &&
+      !isRequestSecure(req) &&
+      env.E2E_ALLOW_HTTP !== "1"
+    ) {
       throw new ApiError(403, "FORBIDDEN", "Sign-in requires an HTTPS connection");
     }
     const { username, password, deviceLabel, totp } = req.body as {

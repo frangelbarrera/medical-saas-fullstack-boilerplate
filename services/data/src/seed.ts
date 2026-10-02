@@ -219,6 +219,15 @@ async function main(): Promise<void> {
       { patientId: patientIds[0], type: "CUSTOM", value: "HbA1c 5.4%", unit: "%" },
     );
 
+    // The front desk authors the patient thread below without a treating
+    // relationship, which requires the patient's communication consent
+    // (COM-001). One GRANTED consent covers every staff participant.
+    await repos.patients.upsertConsent(CLINIC_ID, patientIds[0], {
+      type: "COMMUNICATION",
+      status: "GRANTED",
+      recordedById: staffIds.keller,
+    });
+
     // messages
     const thread = await repos.messaging.createThread(
       { tenantId: CLINIC_ID, actorId: staffIds.brunner },

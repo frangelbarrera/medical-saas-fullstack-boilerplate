@@ -27,6 +27,11 @@ export const envSchema = z.object({
     .regex(/^[0-9a-fA-F]{64}$/, "PHI_HMAC_KEY must be 64 hex chars"),
   FRONTEND_URL: z.string().url().default("http://localhost:3000"),
   TRUST_PROXY: z.string().default("1"),
+  // Local E2E harness only (TLS-001): lets the production build serve a
+  // Playwright run over plain loopback HTTP. Real deployments must keep
+  // this unset - the HTTPS-only sign-in guard and the CSP stay enforced
+  // for every other production request path.
+  E2E_ALLOW_HTTP: z.enum(["0", "1"]).default("0"),
   GEMINI_API_KEY: z.string().optional(),
   LLM_PHI_MODE: z.enum(["strip", "redact", "passthrough"]).default("strip"),
   // Governance records for LLM passthrough (fail-closed, AI-001): the server

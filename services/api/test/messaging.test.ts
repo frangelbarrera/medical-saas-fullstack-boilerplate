@@ -53,6 +53,7 @@ const ids = {
   otherClinic: "",
   portal: "",
   p1: "",
+  p2: "",
 };
 
 const threadCount = async (): Promise<number> =>
@@ -156,6 +157,32 @@ describe("messaging participant validation (COM-001)", () => {
     // user joins the explicit patient-communication flow.
     expect(res.status).toBe(201);
     expect(res.body.patientId).toBe(ids.p1);
+  });
+
+  it("allows staff with the patient's communication consent on a patient thread", async () => {
+    await withTenant({ clinicId: CLINIC, actorId: "tester", actorRole: "ADMIN" }, async (tx) => {
+      const patient = await tx.patient.create({
+        data: { clinicId: CLINIC, internalRef: "P-600002", fullName: "Consent Patient", primaryDoctorId: ids.doctor },
+      });
+      ids.p2 = patient.id;
+      await tx.patientConsent.create({
+        data: { clinicId: CLINIC, patientId: patient.id, type: "COMMUNICATION", status: "GRANTED" },
+      });
+    });
+    const res = await request(app)
+      .post("/api/v1/threads")
+      .set(authHeaders("doctor"))
+      .send({
+        subject: "Front desk follow-up",
+        category: "PATIENT",
+        patientId: ids.p2,
+        participantIds: [ids.outsider],
+        body: "appointment scheduling for the patient",
+      });
+    // The author is the primary doctor; the outside staff member joins
+    // through the patient's granted COMMUNICATION consent (COM-001).
+    expect(res.status).toBe(201);
+    expect(res.body.patientId).toBe(ids.p2);
   });
 
   it("allows an internal staff thread between clinic members", async () => {
