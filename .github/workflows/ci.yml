@@ -38,7 +38,6 @@ jobs:
       # exercised exactly as in production. REQUIRE_DB=1 makes a missing
       # database a hard failure - skipped authorization tests can never
       # produce a green job.
-      # exercised exactly as in production.
       TEST_DATABASE_URL: postgresql://medical_app:ci_app_password@localhost:5432/medical_saas_ci?schema=public
       E2E_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/medical_saas_e2e?schema=public
       E2E_APP_URL: postgresql://medical_app:ci_app_password@localhost:5432/medical_saas_e2e?schema=public
@@ -130,8 +129,10 @@ jobs:
         with:
           fail-on-severity: moderate
 
+      # Pinned to the exact commit of the v2.3.9 release tag. A malformed
+      # pin here made this action unresolvable and failed every CI run.
       - name: Secret Scan (gitleaks)
-        uses: gitleaks/gitleaks-action@ff98106e4d13ca5c2c1f9acc32e3ede5af0ca7f5
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

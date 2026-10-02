@@ -1,10 +1,15 @@
 # Deploy to Production via SSH
 #
-# This workflow is triggered on pushes to main after CI passes. It connects
-# to the production server via SSH, pulls the latest changes, applies
-# database migrations with the privileged URL, rebuilds the Docker containers
-# and restarts them. The application container always connects through the
+# Runs ONLY after the CI workflow has succeeded on main (workflow_run
+# gating), or manually via workflow_dispatch. It connects to the
+# production server via SSH, pulls the latest changes, applies database
+# migrations with the privileged URL, rebuilds the Docker containers and
+# restarts them. The application container always connects through the
 # limited `medical_app` role provisioned by ops/db/init.
+#
+# When the required secrets are not configured the job skips itself with
+# a notice instead of failing every push. Configure them (or set the
+# variables) once a production server exists:
 #
 # Required GitHub secrets:
 #   SERVER_HOST     - production server hostname or IP
@@ -18,16 +23,46 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    name: SSH deploy (skips itself when unconfigured)
     runs-on: ubuntu-latest
+    # On workflow_run, deploy only after a successful CI run of exactly
+    # this commit; manual dispatch always proceeds to the config check.
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.head_sha == github.sha)
+      }}
     steps:
+      - name: Check deployment configuration
+        id: config
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          if [ -z "$SERVER_HOST" ] || [ -z "$SERVER_USER" ] || [ -z "$SERVER_SSH_KEY" ] || [ -z "$DEPLOY_PATH" ]; then
+            echo "::notice::SSH deployment is not configured (SERVER_HOST, SERVER_USER, SERVER_SSH_KEY, DEPLOY_PATH secrets missing). Skipping the deploy; CI remains the only gate. Configure the secrets to enable it."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy via SSH
+        if: steps.config.outputs.configured == 'true'
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.SERVER_HOST }}
