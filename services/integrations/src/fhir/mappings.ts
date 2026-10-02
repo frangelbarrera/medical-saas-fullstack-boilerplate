@@ -45,6 +45,8 @@ export const toFhirPatient = (
     phone: string | null;
     email: string | null;
     address: string | null;
+    /** Consent-driven security label: DATA_SHARING granted -> N, else R. */
+    sharingGranted?: boolean;
   },
   baseUrl: string,
 ): FhirResource => {
@@ -52,6 +54,23 @@ export const toFhirPatient = (
   const resource: FhirResource = {
     resourceType: "Patient",
     id: p.id,
+    meta: {
+      // Security labels (FHIR-003): the confidentiality code follows the
+      // patient's DATA_SHARING consent, not a fixed tag.
+      security: [
+        p.sharingGranted
+          ? {
+              system: "http://terminology.hl7.org/CodeSystem/v3-Confidentiality",
+              code: "N",
+              display: "normal",
+            }
+          : {
+              system: "http://terminology.hl7.org/CodeSystem/v3-Confidentiality",
+              code: "R",
+              display: "restricted",
+            },
+      ],
+    },
     identifier: [
       {
         use: "usual",
@@ -265,7 +284,7 @@ export const toFhirOrganization = (c: { id: string; name: string; phone: string 
 });
 
 export const toFhirAuditEvent = (
-  a: { id: string; action: string; createdAt: string; actorId: string | null; subjectPatientId: string | null; category: string },
+  a: { id: string; action: string; createdAt: string; actorId: string | null; subjectPatientId: string | null; category: string; purpose?: string | null },
 ): FhirResource => ({
   resourceType: "AuditEvent",
   id: a.id,
@@ -279,7 +298,71 @@ export const toFhirAuditEvent = (
   recorded: fhirInstant(a.createdAt),
   agent: a.actorId ? [{ who: { reference: `Practitioner/${a.actorId}` } }] : undefined,
   entity: a.subjectPatientId ? [{ what: { reference: `Patient/${a.subjectPatientId}` } }] : undefined,
+  // Purpose of use context (INT-001): why the access happened, mapped into
+  // the standard purposeOfEvent coding when it maps to a known purpose.
+  purposeOfEvent: a.purpose
+    ? [{
+        coding: [{
+          system: "http://terminology.hl7.org/CodeSystem/v3-ActReason",
+          code: a.purpose === "TREATMENT" ? "TREAT" : a.purpose === "EMERGENCY" ? "ETREAT" : a.purpose === "PAYMENT" ? "PAY" : a.purpose === "OPERATIONS" ? "HOPERAT" : "HLEGAL",
+        }],
+        text: a.purpose,
+      }]
+    : undefined,
 });
+
+/** Provenance sourced from the hash-chained audit trail (INT-001). */
+export const toFhirProvenance = (
+  a: { id: string; action: string; createdAt: string; actorId: string | null; subjectPatientId: string | null },
+): FhirResource => ({
+  resourceType: "Provenance",
+  id: a.id,
+  recorded: fhirInstant(a.createdAt),
+  target: a.subjectPatientId ? [{ reference: `Patient/${a.subjectPatientId}` }] : undefined,
+  agent: a.actorId
+    ? [{ who: { reference: `Practitioner/${a.actorId}` }, requestor: true }]
+    : [{ who: { display: "system" } }],
+  activity: {
+    coding: [{ system: "http://medical-saas.local/actions", code: a.action }],
+  },
+});
+
+/**
+ * SMART App Launch discovery document (INT-001). Authorization endpoints are
+ * advertised ONLY when the deployment configured an external SMART
+ * authorization server; the FHIR mapping layer itself never issues tokens.
+ */
+export const smartConfiguration = (baseUrl: string, authServerUrl?: string): Record<string, unknown> => {
+  const config: Record<string, unknown> = {
+    issuer: authServerUrl ? authServerUrl : baseUrl,
+    capabilities: [
+      "launch-standalone",
+      "client-public",
+      "client-confidential-symmetric",
+      "context-standalone-patient",
+      "permission-v2",
+    ],
+    scopes_supported: [
+      "openid",
+      "fhirUser",
+      "patient/Patient.read",
+      "patient/Patient.search",
+      "patient/Encounter.read",
+      "patient/Observation.read",
+      "patient/Condition.read",
+      "patient/AllergyIntolerance.read",
+      "patient/MedicationRequest.read",
+    ],
+  };
+  if (authServerUrl) {
+    config.authorization_endpoint = `${authServerUrl.replace(/\/$/, "")}/authorize`;
+    config.token_endpoint = `${authServerUrl.replace(/\/$/, "")}/token`;
+    config.grant_types_supported = ["authorization_code"];
+    config.code_challenge_methods_supported = ["S256"];
+    config.token_endpoint_auth_methods_supported = ["client_secret_basic", "none"];
+  }
+  return config;
+};
 
 // ---------------------------------------------------------------------------
 // CapabilityStatement + Bundle helpers
@@ -308,6 +391,7 @@ export const capabilityStatement = (baseUrl: string): FhirResource => ({
         { type: "AllergyIntolerance", interaction: [{ code: "read" }, { code: "search-type" }] },
         { type: "MedicationRequest", interaction: [{ code: "read" }, { code: "search-type" }] },
         { type: "AuditEvent", interaction: [{ code: "search-type" }] },
+        { type: "Provenance", interaction: [{ code: "search-type" }] },
       ],
     },
   ],
