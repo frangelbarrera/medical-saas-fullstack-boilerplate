@@ -15,6 +15,71 @@ A production-grade clinical management boilerplate: a workspace for ambulatory p
 
 ---
 
+## Inside the console
+
+> **Synthetic data notice.** Everything visible in these screenshots - patients, clinicians,
+> appointments, messages, invoices, audit events - is the fictitious seed dataset shipped with
+> the repository (contacts end in `example.test`, identifiers use reserved ranges). It was
+> produced by `npm run db:seed` against a locally deployed production build. No real personal
+> or clinical data is depicted.
+
+<p align="center">
+  <img src="docs/screenshots/daybook.png" alt="Clinical daybook with today's appointments and the review queue" width="100%">
+  <br>
+  <sub><b>Clinical daybook</b> - today's schedule with live statuses, the waiting room and the results-to-review queue.</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/agenda-week.png" alt="Agenda week view" width="100%">
+      <br><sub><b>Agenda</b> - day and week planning by practitioner and room, with conflict detection.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/patients.png" alt="Patient directory" width="100%">
+      <br><sub><b>Patients</b> - directory with server-side search; secretaries see a directory-only projection.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/record-overview.png" alt="Clinical record overview" width="100%">
+      <br><sub><b>Clinical record</b> - consent state, identifiers, problems, allergies and active prescriptions.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/record-encounters.png" alt="Encounter lifecycle" width="100%">
+      <br><sub><b>Encounters</b> - notes move through <code>DRAFT &rarr; IN REVIEW &rarr; SIGNED &rarr; AMENDED</code> with version snapshots.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/messages.png" alt="Secure messaging inbox" width="100%">
+      <br><sub><b>Messages</b> - access-controlled patient and team threads, recorded in the audit trail.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/billing.png" alt="Billing overview" width="100%">
+      <br><sub><b>Billing</b> - invoices, payments and operating costs with race-free numbering.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/insights.png" alt="Aggregate insights" width="100%">
+      <br><sub><b>Insights</b> - aggregate operational metrics only; no individual data without purpose.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/audit.png" alt="Audit trail with verified hash chain" width="100%">
+      <br><sub><b>Audit</b> - append-only hash chain with one-click continuity verification.</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/admin-privacy.png" alt="Privacy operations with DSAR governed release" width="100%">
+  <br>
+  <sub><b>Privacy operations</b> - the DSAR register with the governed release flow (prepare, approve, release) under dual control.</sub>
+</p>
+
+---
+
 ## What's inside
 
 | Area | Highlights |
