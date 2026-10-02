@@ -6,6 +6,7 @@ import {
   userCreate,
   userUpdate,
   clinicUpdate,
+  compliancePackFor,
 } from "@medical/contracts";
 import { withTenant, withTenantRepos, prisma } from "@medical/data";
 import { asyncHandler, ApiError } from "../middleware/errors.js";
@@ -103,6 +104,21 @@ adminRouter.get(
     const clinic = await withTenantRepos(ctx, (repos) => repos.clinics.findById(ctx.tenantId));
     if (!clinic) throw new ApiError(404, "NOT_FOUND", "Clinic not found");
     res.json(clinic);
+  }),
+);
+
+/** Active compliance pack for the clinic's jurisdiction (GOV-001). */
+adminRouter.get(
+  "/compliance",
+  authenticate,
+  requireCapability("admin:clinic"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    const pack = await withTenantRepos(ctx, async (repos) => {
+      const clinic = await repos.clinics.findById(ctx.tenantId);
+      return compliancePackFor(clinic?.jurisdiction);
+    });
+    res.json(pack);
   }),
 );
 

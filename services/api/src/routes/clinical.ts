@@ -14,6 +14,7 @@ import {
   medicationOrderInput,
   medicationStatusChange,
   breakGlassRequest,
+  careTeamAssign,
 } from "@medical/contracts";
 import { withTenantRepos } from "@medical/data";
 import { assertTransition, canEditContent, assertPatientScope } from "@medical/domain";
@@ -24,24 +25,45 @@ import { authenticate, requireCapability, type AuthedRequest } from "../middlewa
 export const clinicalRouter = Router();
 
 /**
- * Policy (CLIN-003): administrators can reach clinical records, but only
- * through a justified, audited break-glass window. Doctors access through
- * their care relationship; the enforcement here is server-side, not cosmetic.
+ * Policy (CLIN-003 / CLIN-004): clinical PHI is reachable only through a
+ * governed path - never through bare capabilities.
+ *   ADMIN:     requires an active, audited break-glass window.
+ *   DOCTOR:    requires an ACTIVE care-team membership or the primary-doctor
+ *              assignment (CARE_RELATIONSHIP_REQUIRED otherwise).
+ *   SECRETARY: never reaches the clinical record (directory + scheduling only).
+ *   PATIENT:   portal users are self-scoped via assertPatientScope upstream.
  */
 const assertClinicalAccess = async (
   ctx: NonNullable<AuthedRequest["ctx"]>,
   repos: import("@medical/data").Repositories,
   patientId: string,
 ): Promise<void> => {
-  if (ctx.actorRole !== "ADMIN") return;
-  const granted = await repos.clinical.hasActiveBreakGlass(ctx.tenantId, ctx.actorId, patientId);
-  if (!granted) {
-    throw new ApiError(
-      403,
-      "BREAK_GLASS_REQUIRED",
-      "This clinical record requires a justified break-glass access",
-      "Provide a reason to open the record under emergency access. The access is logged and expires after 30 minutes.",
-    );
+  if (ctx.actorRole === "ADMIN") {
+    const granted = await repos.clinical.hasActiveBreakGlass(ctx.tenantId, ctx.actorId, patientId);
+    if (!granted) {
+      throw new ApiError(
+        403,
+        "BREAK_GLASS_REQUIRED",
+        "This clinical record requires a justified break-glass access",
+        "Provide a reason to open the record under emergency access. The access is logged and expires after 30 minutes.",
+      );
+    }
+    return;
+  }
+  if (ctx.actorRole === "DOCTOR") {
+    const related = await repos.clinical.hasCareRelationship(ctx.tenantId, ctx.actorId, patientId);
+    if (!related) {
+      throw new ApiError(
+        403,
+        "CARE_RELATIONSHIP_REQUIRED",
+        "You are not part of this patient's care team",
+        "Ask the treating clinician or an administrator to add you to the care team. The assignment is audited.",
+      );
+    }
+    return;
+  }
+  if (ctx.actorRole !== "PATIENT") {
+    throw new ApiError(403, "FORBIDDEN", "This role cannot access clinical records");
   }
 };
 
@@ -75,6 +97,7 @@ clinicalRouter.post(
     const created = await withTenantRepos(ctx, async (repos) => {
       const patient = await repos.patients.findById(ctx.tenantId, input.patientId);
       if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+      await assertClinicalAccess(ctx, repos, input.patientId);
       const encounter = await repos.clinical.create(
         ctx,
         input,
@@ -97,19 +120,19 @@ clinicalRouter.get(
   requireCapability("clinical:read"),
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
-    const encounter = await withTenantRepos(ctx, (repos) =>
-      repos.clinical.findById(ctx.tenantId, req.params.id),
-    );
-    if (!encounter) throw new ApiError(404, "NOT_FOUND", "Encounter not found");
-    assertPatientScope(ctx, encounter.patientId);
-    await withTenantRepos(ctx, (repos) =>
-      repos.audit.append(ctx, {
+    const encounter = await withTenantRepos(ctx, async (repos) => {
+      const found = await repos.clinical.findById(ctx.tenantId, req.params.id);
+      if (!found) throw new ApiError(404, "NOT_FOUND", "Encounter not found");
+      assertPatientScope(ctx, found.patientId);
+      await assertClinicalAccess(ctx, repos, found.patientId);
+      await repos.audit.append(ctx, {
         action: "ENCOUNTER_VIEWED",
         category: "CLINICAL",
-        subjectPatientId: encounter.patientId,
-        target: encounter.id,
-      }),
-    );
+        subjectPatientId: found.patientId,
+        target: found.id,
+      });
+      return found;
+    });
     res.json(encounter);
   }),
 );
@@ -124,6 +147,7 @@ clinicalRouter.put(
     const updated = await withTenantRepos(ctx, async (repos) => {
       const existing = await repos.clinical.findById(ctx.tenantId, req.params.id);
       if (!existing) throw new ApiError(404, "NOT_FOUND", "Encounter not found");
+      await assertClinicalAccess(ctx, repos, existing.patientId);
       if (!canEditContent(existing.status)) {
         throw new ApiError(409, "INVALID_STATE_TRANSITION", "Signed notes cannot be edited; create an amendment instead");
       }
@@ -148,6 +172,7 @@ const transitionTo = (target: "DRAFT" | "IN_REVIEW" | "SIGNED") =>
     const result = await withTenantRepos(ctx, async (repos) => {
       const existing = await repos.clinical.findById(ctx.tenantId, req.params.id);
       if (!existing) throw new ApiError(404, "NOT_FOUND", "Encounter not found");
+      await assertClinicalAccess(ctx, repos, existing.patientId);
       try {
         assertTransition(existing.status, target);
       } catch {
@@ -183,6 +208,7 @@ clinicalRouter.post(
     const amended = await withTenantRepos(ctx, async (repos) => {
       const existing = await repos.clinical.findById(ctx.tenantId, req.params.id);
       if (!existing) throw new ApiError(404, "NOT_FOUND", "Encounter not found");
+      await assertClinicalAccess(ctx, repos, existing.patientId);
       if (existing.status !== "SIGNED" && existing.status !== "AMENDED") {
         throw new ApiError(409, "INVALID_STATE_TRANSITION", "Only signed notes can be amended");
       }
@@ -211,9 +237,13 @@ clinicalRouter.get(
   requireCapability("clinical:read"),
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
-    const versions = await withTenantRepos(ctx, (repos) =>
-      repos.clinical.versions(ctx.tenantId, req.params.id),
-    );
+    const versions = await withTenantRepos(ctx, async (repos) => {
+      const encounter = await repos.clinical.findById(ctx.tenantId, req.params.id);
+      if (!encounter) throw new ApiError(404, "NOT_FOUND", "Encounter not found");
+      assertPatientScope(ctx, encounter.patientId);
+      await assertClinicalAccess(ctx, repos, encounter.patientId);
+      return repos.clinical.versions(ctx.tenantId, req.params.id);
+    });
     res.json({ items: versions });
   }),
 );
@@ -227,9 +257,10 @@ clinicalRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     assertPatientScope(ctx, req.params.patientId);
-    const problems = await withTenantRepos(ctx, (repos) =>
-      repos.clinical.listProblems(ctx.tenantId, req.params.patientId),
-    );
+    const problems = await withTenantRepos(ctx, async (repos) => {
+      await assertClinicalAccess(ctx, repos, req.params.patientId);
+      return repos.clinical.listProblems(ctx.tenantId, req.params.patientId);
+    });
     res.json({ items: problems });
   }),
 );
@@ -242,6 +273,9 @@ clinicalRouter.post(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const created = await withTenantRepos(ctx, async (repos) => {
+      const patient = await repos.patients.exists(ctx.tenantId, (req.body as { patientId: string }).patientId);
+      if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+      await assertClinicalAccess(ctx, repos, (req.body as { patientId: string }).patientId);
       const problem = await repos.clinical.addProblem(ctx, req.body);
       await repos.audit.append(ctx, {
         action: "PROBLEM_RECORDED",
@@ -264,6 +298,9 @@ clinicalRouter.patch(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const updated = await withTenantRepos(ctx, async (repos) => {
+      const patientId = await repos.clinical.findProblemPatient(ctx.tenantId, req.params.id);
+      if (!patientId) throw new ApiError(404, "NOT_FOUND", "Problem not found");
+      await assertClinicalAccess(ctx, repos, patientId);
       const problem = await repos.clinical.setProblemStatus(ctx.tenantId, req.params.id, req.body.status);
       if (problem) {
         await repos.audit.append(ctx, {
@@ -290,9 +327,10 @@ clinicalRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     assertPatientScope(ctx, req.params.patientId);
-    const allergies = await withTenantRepos(ctx, (repos) =>
-      repos.clinical.listAllergies(ctx.tenantId, req.params.patientId),
-    );
+    const allergies = await withTenantRepos(ctx, async (repos) => {
+      await assertClinicalAccess(ctx, repos, req.params.patientId);
+      return repos.clinical.listAllergies(ctx.tenantId, req.params.patientId);
+    });
     res.json({ items: allergies });
   }),
 );
@@ -305,6 +343,9 @@ clinicalRouter.post(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const created = await withTenantRepos(ctx, async (repos) => {
+      const patient = await repos.patients.exists(ctx.tenantId, (req.body as { patientId: string }).patientId);
+      if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+      await assertClinicalAccess(ctx, repos, (req.body as { patientId: string }).patientId);
       const allergy = await repos.clinical.addAllergy(ctx, req.body);
       await repos.audit.append(ctx, {
         action: "ALLERGY_RECORDED",
@@ -327,9 +368,10 @@ clinicalRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     assertPatientScope(ctx, req.params.patientId);
-    const medications = await withTenantRepos(ctx, (repos) =>
-      repos.clinical.listMedications(ctx.tenantId, req.params.patientId),
-    );
+    const medications = await withTenantRepos(ctx, async (repos) => {
+      await assertClinicalAccess(ctx, repos, req.params.patientId);
+      return repos.clinical.listMedications(ctx.tenantId, req.params.patientId);
+    });
     res.json({ items: medications });
   }),
 );
@@ -342,6 +384,9 @@ clinicalRouter.post(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const created = await withTenantRepos(ctx, async (repos) => {
+      const patient = await repos.patients.exists(ctx.tenantId, (req.body as { patientId: string }).patientId);
+      if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+      await assertClinicalAccess(ctx, repos, (req.body as { patientId: string }).patientId);
       const order = await repos.clinical.addMedicationOrder(ctx, req.body);
       await repos.audit.append(ctx, {
         action: "MEDICATION_ORDERED",
@@ -364,6 +409,9 @@ clinicalRouter.patch(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const updated = await withTenantRepos(ctx, async (repos) => {
+      const patientId = await repos.clinical.findMedicationPatient(ctx.tenantId, req.params.id);
+      if (!patientId) throw new ApiError(404, "NOT_FOUND", "Medication order not found");
+      await assertClinicalAccess(ctx, repos, patientId);
       const order = await repos.clinical.setMedicationStatus(
         ctx.tenantId,
         req.params.id,
@@ -395,9 +443,10 @@ clinicalRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     assertPatientScope(ctx, req.params.patientId);
-    const observations = await withTenantRepos(ctx, (repos) =>
-      repos.clinical.listObservations(ctx.tenantId, req.params.patientId),
-    );
+    const observations = await withTenantRepos(ctx, async (repos) => {
+      await assertClinicalAccess(ctx, repos, req.params.patientId);
+      return repos.clinical.listObservations(ctx.tenantId, req.params.patientId);
+    });
     res.json({ items: observations });
   }),
 );
@@ -410,6 +459,9 @@ clinicalRouter.post(
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
     const created = await withTenantRepos(ctx, async (repos) => {
+      const patient = await repos.patients.exists(ctx.tenantId, (req.body as { patientId: string }).patientId);
+      if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+      await assertClinicalAccess(ctx, repos, (req.body as { patientId: string }).patientId);
       const observation = await repos.clinical.addObservation(ctx, req.body);
       await repos.audit.append(ctx, {
         action: "OBSERVATION_RECORDED",
@@ -481,5 +533,94 @@ clinicalRouter.get(
       return repos.clinical.timeline(ctx.tenantId, req.params.patientId);
     });
     res.json({ items: timeline });
+  }),
+);
+
+// ------------------------------------------------------------------ care team
+
+/**
+ * Care-team management (CLIN-004). Reading the team is allowed for the team
+ * itself and for administrators; assignment needs admin:users or an active
+ * treating relationship; ending a membership is admin-only (or self-release).
+ * Every transition is audited.
+ */
+clinicalRouter.get(
+  "/patients/:patientId/care-team",
+  authenticate,
+  requireCapability("patients:read"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    assertPatientScope(ctx, req.params.patientId);
+    const items = await withTenantRepos(ctx, async (repos) => {
+      if (ctx.actorRole !== "ADMIN") {
+        await assertClinicalAccess(ctx, repos, req.params.patientId);
+      }
+      return repos.clinical.listCareTeam(ctx.tenantId, req.params.patientId);
+    });
+    res.json({ items });
+  }),
+);
+
+clinicalRouter.post(
+  "/patients/:patientId/care-team",
+  authenticate,
+  validateBody(careTeamAssign),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    const input = req.body as ReturnType<typeof careTeamAssign.parse>;
+    const membershipId = await withTenantRepos(ctx, async (repos) => {
+      const exists = await repos.patients.exists(ctx.tenantId, req.params.patientId);
+      if (!exists) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+      const isTreating =
+        ctx.actorRole === "DOCTOR" &&
+        (await repos.clinical.hasCareRelationship(ctx.tenantId, ctx.actorId, req.params.patientId));
+      if (!ctx.capabilities.includes("admin:users") && !isTreating) {
+        throw new ApiError(403, "FORBIDDEN", "Only administrators or treating clinicians manage the care team");
+      }
+      const target = await repos.users.findById(ctx.tenantId, input.userId);
+      if (!target || !target.isActive) throw new ApiError(404, "NOT_FOUND", "Staff member not found");
+      if (target.patientId) {
+        throw new ApiError(422, "UNPROCESSABLE", "Portal users cannot join a care team");
+      }
+      const id = await repos.clinical.assignCareTeamMember(ctx, req.params.patientId, input.userId, input.memberRole);
+      await repos.audit.append(ctx, {
+        action: "CARE_TEAM_ASSIGNED",
+        category: "CLINICAL",
+        subjectPatientId: req.params.patientId,
+        target: id,
+        details: { userId: input.userId, memberRole: input.memberRole },
+      });
+      return id;
+    });
+    res.status(201).json({ id: membershipId });
+  }),
+);
+
+clinicalRouter.delete(
+  "/patients/:patientId/care-team/:membershipId",
+  authenticate,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const ctx = req.ctx!;
+    const ended = await withTenantRepos(ctx, async (repos) => {
+      const team = await repos.clinical.listCareTeam(ctx.tenantId, req.params.patientId);
+      const membership = team.find((m) => m.id === req.params.membershipId);
+      if (!membership) throw new ApiError(404, "NOT_FOUND", "Care-team membership not found");
+      const selfRelease = membership.userId === ctx.actorId;
+      if (!ctx.capabilities.includes("admin:users") && !selfRelease) {
+        throw new ApiError(403, "FORBIDDEN", "Only administrators or the member themselves end a membership");
+      }
+      const ok = await repos.clinical.endCareTeamMember(ctx.tenantId, req.params.patientId, req.params.membershipId);
+      if (ok) {
+        await repos.audit.append(ctx, {
+          action: "CARE_TEAM_ENDED",
+          category: "CLINICAL",
+          subjectPatientId: req.params.patientId,
+          target: req.params.membershipId,
+          details: { userId: membership.userId },
+        });
+      }
+      return ok;
+    });
+    res.json({ ok: ended });
   }),
 );

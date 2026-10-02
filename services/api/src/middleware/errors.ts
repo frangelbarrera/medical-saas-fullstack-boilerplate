@@ -14,6 +14,8 @@ export class ApiError extends Error {
     title: string,
     public detail?: string,
     public errors?: { field: string; message: string }[],
+    /** Safe scalar extensions surfaced on the problem detail (RFC 9457). */
+    public meta?: Record<string, string | number | boolean | null>,
   ) {
     super(title);
     this.name = "ApiError";
@@ -26,13 +28,23 @@ const STATUS_BY_CODE: Record<string, number> = {
   CONFLICT: 409,
   INVALID_STATE_TRANSITION: 409,
   BREAK_GLASS_REQUIRED: 403,
+  CARE_RELATIONSHIP_REQUIRED: 403,
+  STEP_UP_REQUIRED: 403,
+  MFA_REQUIRED: 401,
+  MFA_INVALID_CODE: 401,
+  DSAR_APPROVAL_REQUIRED: 403,
+  ARTIFACT_UNAVAILABLE: 409,
   CONSENT_REQUIRED: 422,
   UNPROCESSABLE: 422,
 };
 
 export const toProblem = (err: unknown): ProblemDetail => {
   if (err instanceof ApiError) {
-    return problem(err.code, err.message, err.status, { detail: err.detail, errors: err.errors });
+    return problem(err.code, err.message, err.status, {
+      detail: err.detail,
+      errors: err.errors,
+      meta: err.meta,
+    });
   }
   if (err instanceof DomainError) {
     const status = STATUS_BY_CODE[err.code] ?? 400;

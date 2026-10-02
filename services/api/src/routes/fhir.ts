@@ -6,10 +6,10 @@ import {
 
 } from "@medical/contracts";
 import { withTenantRepos, loadEnv } from "@medical/data";
+import { assertPatientScope } from "@medical/domain";
 import { asyncHandler, ApiError } from "../middleware/errors.js";
 import { authenticate, requireCapability, type AuthedRequest } from "../middleware/auth.js";
 import {
-  bundle as fhirBundle,
   toFhirPatient,
   capabilityStatement,
   mapIcd10ToSnomed,
@@ -31,13 +31,41 @@ fhirRouter.get(
   requireCapability("clinical:read"),
   asyncHandler(async (req: AuthedRequest, res) => {
     const ctx = req.ctx!;
+    const purposeOfUse = typeof req.query.purposeOfUse === "string" ? req.query.purposeOfUse : "TREATMENT";
     const resource = await withTenantRepos(ctx, async (repos) => {
       const patient = await repos.patients.findById(ctx.tenantId, req.params.id);
       if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+      // FHIR reads are clinical reads: the same governed access model applies
+      // (break-glass for administrators, care relationship for clinicians),
+      // and the purpose of use lands in the audit chain.
+      if (ctx.selfPatientId) {
+        assertPatientScope(ctx, req.params.id);
+      } else if (ctx.actorRole === "ADMIN") {
+        const granted = await repos.clinical.hasActiveBreakGlass(ctx.tenantId, ctx.actorId, req.params.id);
+        if (!granted) {
+          throw new ApiError(
+            403,
+            "BREAK_GLASS_REQUIRED",
+            "This clinical resource requires a justified break-glass access",
+            "Provide a reason to open the record under emergency access. The access is logged and expires after 30 minutes.",
+          );
+        }
+      } else if (ctx.actorRole === "DOCTOR") {
+        const related = await repos.clinical.hasCareRelationship(ctx.tenantId, ctx.actorId, req.params.id);
+        if (!related) {
+          throw new ApiError(
+            403,
+            "CARE_RELATIONSHIP_REQUIRED",
+            "You are not part of this patient's care team",
+            "Ask the treating clinician or an administrator to add you to the care team. The assignment is audited.",
+          );
+        }
+      }
       await repos.audit.append(ctx, {
         action: "FHIR_RESOURCE_EXPORTED",
         category: "EXPORT",
         subjectPatientId: patient.id,
+        purpose: purposeOfUse,
         details: { resourceType: "Patient" },
       });
       return toFhirPatient(

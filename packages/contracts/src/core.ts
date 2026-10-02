@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { LOCALES } from "./locales.js";
+import { JURISDICTIONS } from "./compliance.js";
 import type { Capability } from "./capabilities.js";
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,7 @@ export const clinicUpdate = z.object({
   locale: z.enum(LOCALES).optional(),
   timezone: z.string().max(60).optional(),
   currency: z.enum(["CHF", "EUR", "USD"]).optional(),
+  jurisdiction: z.enum(JURISDICTIONS).optional(),
   retentionYears: z.number().int().min(1).max(50).optional(),
 });
 export type ClinicUpdate = z.infer<typeof clinicUpdate>;

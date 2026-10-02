@@ -39,16 +39,26 @@ aiRouter.post(
       if (encounter.status === "SIGNED") {
         throw new ApiError(409, "INVALID_STATE_TRANSITION", "Signed notes cannot be re-drafted");
       }
-      // AI_PROCESSING consent gate (AI-001): opt-out blocks generation.
+      // AI_PROCESSING consent gate (AI-001), fail-closed: AI processing of
+      // health data needs a positive legal basis. Missing, REFUSED and
+      // EXPIRED consents all block generation - absence of refusal is never
+      // treated as consent.
       const consent = await repos.patients.consentFor(ctx.tenantId, encounter.patientId, "AI_PROCESSING");
-      if (consent === "REFUSED") {
+      if (consent !== "GRANTED") {
         await repos.audit.append(ctx, {
           action: "AI_CONSENT_BLOCKED",
           category: "AI",
           subjectPatientId: encounter.patientId,
           target: encounterId,
+          details: { consentState: consent ?? "MISSING" },
         });
-        throw new ApiError(422, "CONSENT_REQUIRED", "The patient has declined AI processing for their record");
+        throw new ApiError(
+          422,
+          "CONSENT_REQUIRED",
+          consent === "REFUSED"
+            ? "The patient has declined AI processing for their record"
+            : "AI processing requires the patient's AI_PROCESSING consent",
+        );
       }
       const ai = provider();
       if (!ai) throw new ApiError(503, "AI_NOT_ENABLED", "AI features are not configured on this deployment");
@@ -162,7 +172,10 @@ aiRouter.post(
       const history = await repos.ai.listMessages(ctx.tenantId, conversation, ctx.actorId);
       const sanitized = sanitizeFreeText(message, env.LLM_PHI_MODE);
 
-      await repos.ai.appendMessage(ctx, conversation, "USER", message, { redactionApplied: sanitized !== message });
+      // The stored message is the SANITIZED text (AI-001): raw PHI never
+      // reaches persistence even when the LLM call is redacted separately.
+      // `redactionApplied` keeps the audit signal.
+      await repos.ai.appendMessage(ctx, conversation, "USER", sanitized, { redactionApplied: sanitized !== message });
       const prompt = (await repos.ai.activePrompt(ctx.tenantId, "CHAT_ASSISTANT")) ?? null;
       const template = prompt?.template ?? DEFAULT_PROMPTS.CHAT_ASSISTANT.template;
       const reply = await ai.generateChatReply(template, {

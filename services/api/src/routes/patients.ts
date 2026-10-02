@@ -88,20 +88,52 @@ patientsRouter.get(
     }
     assertPatientScope(ctx, id);
 
-    const result = await withTenantRepos(ctx, (repos) =>
-      repos.patients.findById(ctx.tenantId, id),
-    );
-    if (!result) throw new ApiError(404, "NOT_FOUND", "Patient not found");
+    const result = await withTenantRepos(ctx, async (repos) => {
+      const patient = await repos.patients.findById(ctx.tenantId, id);
+      if (!patient) throw new ApiError(404, "NOT_FOUND", "Patient not found");
 
-    await withTenantRepos(ctx, (repos) =>
-      repos.audit.append(ctx, {
+      // PHI policy on the detail projection (SEC-001): decrypted contacts are
+      // clinical-adjacent data and follow the same governed access model as
+      // the record itself. Without a grant, the 403 carries ONLY the
+      // directory-visible name/internalRef in meta so a client can render the
+      // access gate - never phone, email or address.
+      if (!ctx.selfPatientId && ctx.actorRole !== "SECRETARY") {
+        if (ctx.actorRole === "ADMIN") {
+          const granted = await repos.clinical.hasActiveBreakGlass(ctx.tenantId, ctx.actorId, id);
+          if (!granted) {
+            throw new ApiError(
+              403,
+              "BREAK_GLASS_REQUIRED",
+              "This patient record requires a justified break-glass access",
+              "Provide a reason to open the record under emergency access. The access is logged and expires after 30 minutes.",
+              undefined,
+              { name: patient.fullName, internalRef: patient.internalRef },
+            );
+          }
+        } else if (ctx.actorRole === "DOCTOR") {
+          const related = await repos.clinical.hasCareRelationship(ctx.tenantId, ctx.actorId, id);
+          if (!related) {
+            throw new ApiError(
+              403,
+              "CARE_RELATIONSHIP_REQUIRED",
+              "You are not part of this patient's care team",
+              "Ask the treating clinician or an administrator to add you to the care team. The assignment is audited.",
+              undefined,
+              { name: patient.fullName, internalRef: patient.internalRef },
+            );
+          }
+        }
+      }
+
+      await repos.audit.append(ctx, {
         action: "PATIENT_VIEWED",
         category: "PHI",
         subjectPatientId: id,
         target: id,
         purpose: "TREATMENT",
-      }),
-    );
+      });
+      return patient;
+    });
     res.json(result);
   }),
 );
