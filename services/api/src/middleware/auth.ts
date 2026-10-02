@@ -20,6 +20,8 @@ declare module "express-serve-static-core" {
 
 export interface AuthedRequest extends Request {
   ctx?: RequestContext;
+  /** Session-level step-up timestamp: when the last re-authentication happened. */
+  stepUpAt?: Date | null;
 }
 
 export const authenticate = (req: AuthedRequest, _res: Response, next: NextFunction): void => {
@@ -65,6 +67,7 @@ export const authenticate = (req: AuthedRequest, _res: Response, next: NextFunct
       requestId: resHeaderRequestId(req),
       capabilities: capabilitiesForRole(role) as Capability[],
     };
+    req.stepUpAt = session.stepUpAt;
     next();
   })().catch(next);
 };
@@ -80,4 +83,27 @@ export const requireCapability = (capability: Capability) => {
     }
     next();
   };
+};
+
+/** Privileged window opened by a successful step-up re-authentication. */
+export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * Privacy-critical operations (DSAR release, MFA changes) require a fresh
+ * re-authentication, not just a valid session (PRIV-001 / AUTH-001).
+ */
+export const requireRecentStepUp = (req: AuthedRequest, _res: Response, next: NextFunction): void => {
+  if (!req.ctx) return next(new ApiError(401, "UNAUTHORIZED", "Authentication required"));
+  const at = req.stepUpAt ? new Date(req.stepUpAt).getTime() : 0;
+  if (!at || Date.now() - at > STEP_UP_WINDOW_MS) {
+    return next(
+      new ApiError(
+        403,
+        "STEP_UP_REQUIRED",
+        "Re-authentication required",
+        "Confirm your password (and TOTP code when enrolled) to open a 5-minute privileged window.",
+      ),
+    );
+  }
+  next();
 };
