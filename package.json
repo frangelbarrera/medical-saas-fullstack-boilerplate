@@ -66,13 +66,13 @@
     "eslint-plugin-security": "^3.0.1",
     "globals": "^15.12.0",
     "pino-pretty": "^13.2.0",
-    "prettier": "^3.9.9",
+    "prettier": "^3.9.10",
     "prisma": "^5.22.0",
     "rimraf": "^6.1.0",
     "supertest": "^7.3.1",
     "tsx": "^4.23.15",
     "typescript": "~5.8.2",
-    "typescript-eslint": "^8.71.1",
+    "typescript-eslint": "^8.71.2",
     "vitest": "^4.1.11"
   },
   "dependencies": {
