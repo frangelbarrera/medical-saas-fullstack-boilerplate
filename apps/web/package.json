@@ -13,8 +13,8 @@
     "@fontsource/ibm-plex-sans": "^5.2.5",
     "@medical/contracts": "*",
     "@medical/ui": "*",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
