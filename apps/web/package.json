@@ -13,13 +13,13 @@
     "@fontsource/ibm-plex-sans": "^5.2.5",
     "@medical/contracts": "*",
     "@medical/ui": "*",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.2",
     "tailwindcss": "^4.1.14",
-    "vite": "^8.3.4"
+    "vite": "^8.3.5"
   }
 }
